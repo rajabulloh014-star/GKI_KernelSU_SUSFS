@@ -377,6 +377,89 @@ jobs:
         kernel_version: ${{ inputs.kernel_version }}
 
     # =========================================================================
+    # Re:Kernel — Tombstone Kernel Support
+    # =========================================================================
+    - name: Apply Re:Kernel
+      if: contains(inputs.feature_set, 'ReKernel') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        WORKSPACE="${{ github.workspace }}"
+        if [ -d "$WORKSPACE/kernel/common" ]; then
+          KERNEL_SRC="$WORKSPACE/kernel/common"
+        else
+          KERNEL_SRC="$WORKSPACE/kernel"
+        fi
+
+        echo "==============================================="
+        echo "[*] Menginstall dependensi Re:Kernel..."
+        echo "==============================================="
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq aria2 coccinelle
+
+        echo "==============================================="
+        echo "[*] Mengunduh source dan patch Re:Kernel..."
+        echo "==============================================="
+        TEMP_DIR="/tmp/rekernel-patch"
+        rm -rf "$TEMP_DIR"
+        mkdir -p "$TEMP_DIR/cocci"
+
+        REPO_BASE="https://github.com/dabao1955/kernel_build_action/raw/main/rekernel"
+        PATCHES_BASE="https://raw.githubusercontent.com/dabao1955/kernel_build_action/main/rekernel/patches"
+
+        aria2c -d "$TEMP_DIR" -o src.zip "$REPO_BASE/src.zip"
+        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/proc_ops.cocci"
+        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/binder.cocci"
+        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/signal.cocci"
+
+        echo "[*] Mengekstrak source..."
+        unzip -o "$TEMP_DIR/src.zip" -d "$TEMP_DIR"
+
+        REKERNEL_DST="$KERNEL_SRC/drivers/rekernel"
+        rm -rf "$REKERNEL_DST"
+        cp -r "$TEMP_DIR/rekernel" "$REKERNEL_DST"
+        echo "[+] Re:Kernel source disalin ke $REKERNEL_DST"
+
+        echo "[*] Menerapkan patch Coccinelle..."
+        if grep -q "struct proc_ops" "$KERNEL_SRC/include/linux/proc_fs.h" 2>/dev/null; then
+          spatch --in-place --sp-file "$TEMP_DIR/cocci/proc_ops.cocci" "$REKERNEL_DST/rekernel.c" || true
+        fi
+
+        if [ -f "$KERNEL_SRC/drivers/android/binder.c" ]; then
+          spatch --in-place --sp-file "$TEMP_DIR/cocci/binder.cocci" "$KERNEL_SRC/drivers/android/binder.c" || true
+        fi
+
+        if [ -f "$KERNEL_SRC/kernel/signal.c" ]; then
+          spatch --in-place --sp-file "$TEMP_DIR/cocci/signal.cocci" "$KERNEL_SRC/kernel/signal.c" || true
+        fi
+
+        echo "[*] Menambahkan konfigurasi ke defconfig dan fragment..."
+        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+        {
+          echo ""
+          echo "# === Re:Kernel configs ==="
+          echo "CONFIG_REKERNEL=y"
+          echo "CONFIG_REKERNEL_NETWORK=n"
+          echo "# === End Re:Kernel configs ==="
+        } >> "$FRAGMENT"
+
+        KCONFIG="$KERNEL_SRC/drivers/Kconfig"
+        if ! grep -q 'source "drivers/rekernel/Kconfig"' "$KCONFIG" 2>/dev/null; then
+          awk '/^endmenu$/{last=NR} {lines[NR]=$0} END{for(i=1;i<=NR;i++){if(i==last) print "source \"drivers/rekernel/Kconfig\""; print lines[i]}}' "$KCONFIG" > "$KCONFIG.tmp" && mv "$KCONFIG.tmp" "$KCONFIG"
+          echo "[+] drivers/Kconfig diperbarui"
+        fi
+
+        MAKEFILE="$KERNEL_SRC/drivers/Makefile"
+        if ! grep -q "obj-\$(CONFIG_REKERNEL) += rekernel/" "$MAKEFILE" 2>/dev/null; then
+          echo "" >> "$MAKEFILE"
+          echo "obj-\$(CONFIG_REKERNEL) += rekernel/" >> "$MAKEFILE"
+          echo "[+] drivers/Makefile diperbarui"
+        fi
+
+        echo "[+] Re:Kernel berhasil diintegrasikan."
+
+    # =========================================================================
     # Kali NetHunter — Core Patches
     # =========================================================================
     - name: Apply Kali NetHunter Kernel Patches
@@ -763,6 +846,8 @@ jobs:
         check_config "CONFIG_RTL8XXXU"
         check_config "CONFIG_MT7601U"
         check_config "CONFIG_ATH9K_HTC"
+        echo "--- Re:Kernel ---"
+        check_config "CONFIG_REKERNEL"
         echo "==============================================="
 
     - name: Apply ABI Compare Bypass
@@ -971,6 +1056,11 @@ jobs:
           SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
         fi
 
+        REKERNEL_ENABLED="false"
+        if [ "${{ contains(inputs.feature_set, 'ReKernel') || inputs.feature_set == 'All' }}" = "true" ]; then
+          REKERNEL_ENABLED="true"
+        fi
+
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
           echo
@@ -987,6 +1077,7 @@ jobs:
           echo "| **SUSFS Version** | ${SUSFS_VER} |"
           echo "| **SUSFS Commit** | ${SUSFS_SHA} |"
           echo "| **NoMount Commit** | ${NOMOUNT_SHA} |"
+          echo "| **Re:Kernel** | ${REKERNEL_ENABLED} |"
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
@@ -1015,11 +1106,16 @@ jobs:
           NOMOUNT_ENABLED="true"
         fi
 
+        REKERNEL_ENABLED="false"
+        if [ "${{ contains(inputs.feature_set, 'ReKernel') || inputs.feature_set == 'All' }}" = "true" ]; then
+          REKERNEL_ENABLED="true"
+        fi
+
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build + root + SUSFS + NoMount + Kali NetHunter"
+          METHOD="GKI source build + root + SUSFS + NoMount + Re:Kernel + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build + root + SUSFS + Kali NetHunter"
+          METHOD="GKI source build + root + SUSFS + Re:Kernel + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 
@@ -1086,6 +1182,7 @@ jobs:
           --arg root_commit "${ROOT_COMMIT:-${KSU_COMMIT:-N/A}}" \
           --arg susfs_commit "${SUSFS_COMMIT:-N/A}" \
           --arg nomount_commit "${NOMOUNT_COMMIT:-N/A}" \
+          --arg rekernel_enabled "$REKERNEL_ENABLED" \
           --arg android_branch "${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}" \
           --arg kmi "${{ inputs.android_version }}-${{ inputs.kernel_version }}" \
           --arg page_size "${{ inputs.page_size }}" \
@@ -1106,6 +1203,7 @@ jobs:
             root: {implementation: $root_implementation, manager: $root_manager, version: $root_version, commit: $root_commit},
             susfs_revision: $susfs_commit,
             nomount_commit: $nomount_commit,
+            rekernel_enabled: $rekernel_enabled,
             android_branch: $android_branch,
             kmi: $kmi,
             page_size: $page_size,

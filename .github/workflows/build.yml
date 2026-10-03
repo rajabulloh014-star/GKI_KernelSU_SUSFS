@@ -893,17 +893,30 @@ jobs:
         OUT_DIR="$WORKSPACE/external_modules"
         mkdir -p "$OUT_DIR"
 
+        # =====================================================================
+        # 0. Install cross-compiler (WAJIB sebelum make)
+        # =====================================================================
+        echo "==============================================="
+        echo "[*] Menginstall cross-compiler aarch64..."
+        echo "==============================================="
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+        echo "[+] Cross-compiler terinstall:"
+        aarch64-linux-gnu-gcc --version | head -1
+
         echo "==============================================="
         echo "[*] Mencari Module.symvers dari output Kleaf..."
         echo "==============================================="
 
         MODULE_SYMVERS=""
-        # 1. Cek lokasi standar
+
+        # --- 1. Cek lokasi standar ---
         for candidate in \
           "/home/runner/out/dist/Module.symvers" \
           "/home/runner/out/Module.symvers" \
           "$KERNEL_SRC/Module.symvers" \
-          "$WORKSPACE/out/Module.symvers"; do
+          "$WORKSPACE/out/Module.symvers" \
+          "$WORKSPACE/out/dist/Module.symvers"; do
           if [ -f "$candidate" ]; then
             MODULE_SYMVERS="$candidate"
             echo "[+] Ditemukan di lokasi standar: $candidate"
@@ -911,21 +924,29 @@ jobs:
           fi
         done
 
-        # 2. Cari di seluruh /home/runner/out
+        # --- 2. Cari di seluruh /home/runner/out dan workspace ---
         if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[*] Mencari di seluruh /home/runner/out ..."
-          MODULE_SYMVERS=$(find /home/runner/out -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
+          echo "[*] Mencari di seluruh /home/runner/out dan workspace..."
+          MODULE_SYMVERS=$(find /home/runner/out "$WORKSPACE/out" -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
           [ -n "$MODULE_SYMVERS" ] && echo "[+] Ditemukan: $MODULE_SYMVERS"
         fi
 
-        # 3. Cari di dalam arsip Kleaf filegroup
+        # --- 3. Cari di dalam arsip Kleaf filegroup (nama spesifik) ---
         if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[*] Mencari di dalam arsip Kleaf filegroup..."
-          KLEAF_ARCHIVE=$(find /home/runner/out -name "*filegroup*.tar.gz" 2>/dev/null | head -1 || true)
+          echo "[*] Mencari arsip kernel_aarch64_filegroup_decl.tar.gz..."
+          KLEAF_ARCHIVE=$(find /home/runner/out "$WORKSPACE/out" \
+            -name "kernel_aarch64_filegroup_decl.tar.gz" -type f 2>/dev/null | head -1 || true)
+
+          # Fallback: wildcard lebih luas
+          if [ -z "$KLEAF_ARCHIVE" ]; then
+            KLEAF_ARCHIVE=$(find /home/runner/out "$WORKSPACE/out" \
+              -name "*filegroup*.tar.gz" -type f 2>/dev/null | head -1 || true)
+          fi
+
           if [ -n "$KLEAF_ARCHIVE" ]; then
             echo "[*] Menemukan arsip: $KLEAF_ARCHIVE"
             mkdir -p /tmp/kleaf-extract
-            tar -xzf "$KLEAF_ARCHIVE" -C /tmp/kleaf-extract/ --wildcards '*Module.symvers' 2>/dev/null || true
+            tar -xzf "$KLEAF_ARCHIVE" -C /tmp/kleaf-extract/ 2>/dev/null || true
             MODULE_SYMVERS=$(find /tmp/kleaf-extract -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
             if [ -n "$MODULE_SYMVERS" ]; then
               echo "[+] Ditemukan di dalam arsip: $MODULE_SYMVERS"
@@ -933,23 +954,47 @@ jobs:
           fi
         fi
 
-        # 4. FALLBACK: Generate dengan make modules_prepare
+        # --- 4. FALLBACK: Generate sendiri dengan gki_defconfig + modules_prepare ---
         if [ -z "$MODULE_SYMVERS" ]; then
           echo "[!] Module.symvers TIDAK ditemukan. Mencoba generate sendiri..."
           echo "[*] Isi /home/runner/out saat ini:"
           ls -la /home/runner/out/ 2>/dev/null || true
 
-          # Cek apakah config fragment sudah masuk ke source
-          if [ ! -f "$KERNEL_SRC/include/generated/autoconf.h" ]; then
-            echo "[*] Menjalankan 'make oldconfig && make prepare'..."
-            (cd "$KERNEL_SRC" && \
-              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig && \
-              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare) || true
+          cd "$KERNEL_SRC"
+
+          # 4a. Cari gki_defconfig
+          GKI_DEFCONFIG=""
+          for cfg in \
+            "arch/arm64/configs/gki_defconfig" \
+            "arch/arm64/configs/gki_aarch64_defconfig" \
+            "arch/arm64/configs/defconfig"; do
+            if [ -f "$cfg" ]; then
+              GKI_DEFCONFIG="$cfg"
+              break
+            fi
+          done
+
+          if [ -n "$GKI_DEFCONFIG" ]; then
+            echo "[*] Menggunakan defconfig: $GKI_DEFCONFIG"
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- "$(basename "$GKI_DEFCONFIG")" || true
+          else
+            echo "[!] Tidak menemukan gki_defconfig. Mencoba 'defconfig' generik..."
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig || true
           fi
 
+          # 4b. Pastikan CONFIG_MODVERSIONS=y (wajib untuk Module.symvers)
+          if [ -f ".config" ]; then
+            echo "[*] Memastikan CONFIG_MODVERSIONS=y..."
+            if ! grep -q "^CONFIG_MODVERSIONS=y" .config; then
+              echo "CONFIG_MODVERSIONS=y" >> .config
+            fi
+          fi
+
+          echo "[*] Menjalankan 'make prepare'..."
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare -j"$(nproc)" || true
+
           echo "[*] Menjalankan 'make modules_prepare'..."
-          (cd "$KERNEL_SRC" && \
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j"$(nproc)" || true
 
           MODULE_SYMVERS=$(find "$KERNEL_SRC" -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
           if [ -n "$MODULE_SYMVERS" ]; then
@@ -959,13 +1004,14 @@ jobs:
 
         if [ -z "$MODULE_SYMVERS" ]; then
           echo "[!] Module.symvers TIDAK BISA ditemukan/digenerate. Skip kompilasi driver."
-          echo "[*] Tree kernel source:"
-          ls -la "$KERNEL_SRC/" 2>/dev/null | head -20 || true
+          echo "[*] Tree kernel source (10 baris pertama):"
+          ls -la "$KERNEL_SRC/" 2>/dev/null | head -10 || true
           exit 0
         fi
 
         echo "[*] Menggunakan Module.symvers: $MODULE_SYMVERS"
 
+        # Cek kernel.release
         KERNEL_RELEASE_FILE=$(find "$KERNEL_SRC" -name "kernel.release" -type f 2>/dev/null | head -1 || true)
         if [ -n "$KERNEL_RELEASE_FILE" ]; then
           echo "[*] Kernel release: $(cat "$KERNEL_RELEASE_FILE")"

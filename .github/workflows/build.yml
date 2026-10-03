@@ -86,7 +86,7 @@ jobs:
   build-gki:
     name: "${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }} (${{ inputs.variant }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     concurrency:
       group: build-${{ inputs.root_flavor }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}${{ inputs.page_size }}
       cancel-in-progress: false
@@ -286,7 +286,7 @@ jobs:
         set -euo pipefail
         KVER="${{ inputs.kernel_version }}"
         if [ "$(printf '%s\n' "6.6" "$KVER" | sort -V | head -n1)" = "6.6" ]; then
-          echo "[*] KVER $KVER >= 6.6, patching selinux_hide.c (all flavors/branches)"
+          echo "[*] KVER $KVER >= 6.6, patching selinux_hide.c"
           for f in $(find "${{ github.workspace }}" -name selinux_hide.c 2>/dev/null); do
             if grep -q "extern void security_dump_masked_av_fn" "$f"; then
               sed -i 's/if (security_dump_masked_av_fn)/if (\&security_dump_masked_av_fn)/g' "$f"
@@ -454,7 +454,7 @@ jobs:
         echo "[+] Kali NetHunter patch step selesai."
 
     # =========================================================================
-    # Kali NetHunter — Full Feature Configs (In-Tree Drivers Only)
+    # Kali NetHunter — Full Feature Configs (In-Tree Drivers)
     # =========================================================================
     - name: Apply NetHunter Full Feature Configs
       if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
@@ -508,7 +508,7 @@ jobs:
         CONFIG_USB_DWC3_GADGET=y
         CONFIG_USB_LIBCOMPOSITE=y
 
-        # --- USB Host (External Wi-Fi, 4G, Bluetooth, Serial) ---
+        # --- USB Host ---
         CONFIG_USB_ACM=y
         CONFIG_USB_ETH=y
         CONFIG_USB_NCM=y
@@ -527,7 +527,7 @@ jobs:
         CONFIG_USB_EHCI_HCD_PLATFORM=y
         CONFIG_USB_OHCI_HCD_PLATFORM=y
 
-        # --- Bluetooth HID & RFCOMM (BT-Arsenal) ---
+        # --- Bluetooth HID & RFCOMM ---
         CONFIG_BT=y
         CONFIG_BT_HIDP=y
         CONFIG_BT_HCIUART=y
@@ -667,8 +667,7 @@ jobs:
         CONFIG_VLAN_8021Q=y
         CONFIG_IP_MULTIPLE_TABLES=y
 
-        # --- In-Tree Wi-Fi USB Drivers (built as modules) ---
-        # rtw88 family (Realtek 802.11ac)
+        # --- In-Tree Wi-Fi USB Drivers (modules) ---
         CONFIG_RTW88=m
         CONFIG_RTW88_CORE=m
         CONFIG_RTW88_PCI=m
@@ -684,15 +683,12 @@ jobs:
         CONFIG_RTW88_8723DS=m
         CONFIG_RTW88_DEBUG=y
 
-        # rtl8xxxu family (Realtek 802.11n USB)
         CONFIG_RTL8XXXU=m
         CONFIG_RTL8XXXU_UNTESTED=y
 
-        # Staging Realtek drivers
         CONFIG_R8188EU=m
         CONFIG_R8712U=m
 
-        # MediaTek USB
         CONFIG_MT7601U=m
         CONFIG_MT76x0U=m
         CONFIG_MT76x2U=m
@@ -701,17 +697,14 @@ jobs:
         CONFIG_MT76_USB=m
         CONFIG_MT76_CORE=m
 
-        # Atheros USB
         CONFIG_ATH9K_HTC=m
         CONFIG_ATH9K_HTC_DEBUGFS=y
         CONFIG_CARL9170=m
         CONFIG_ATH6KL=m
         CONFIG_ATH6KL_USB=m
 
-        # Zydas
         CONFIG_ZD1211RW=m
 
-        # Ralink
         CONFIG_RT2X00=m
         CONFIG_RT2500USB=m
         CONFIG_RT73USB=m
@@ -733,7 +726,7 @@ jobs:
         echo "[+] NetHunter full feature configs appended to $FRAGMENT"
 
     # =========================================================================
-    # Kali NetHunter — Verify Features
+    # Kali NetHunter — Verify Configs
     # =========================================================================
     - name: Verify NetHunter Features
       if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
@@ -758,45 +751,31 @@ jobs:
         echo "--- Wi-Fi Injection ---"
         check_config "CONFIG_CFG80211"
         check_config "CONFIG_MAC80211"
-
         echo "--- USB HID ---"
         check_config "CONFIG_USB_CONFIGFS_F_HID"
         check_config "CONFIG_HIDRAW"
-
         echo "--- Bluetooth RFCOMM ---"
         check_config "CONFIG_BT_RFCOMM"
         check_config "CONFIG_BT_HIDP"
-
-        echo "--- SDR ---"
+        echo "--- SDR / CAN / Netfilter ---"
         check_config "CONFIG_DVB_RTL2832_SDR"
-
-        echo "--- CAN Bus ---"
         check_config "CONFIG_CAN"
-
-        echo "--- Netfilter ---"
         check_config "CONFIG_NF_NAT"
-
         echo "--- In-Tree Wi-Fi Drivers ---"
         check_config "CONFIG_RTW88_USB"
-        check_config "CONFIG_RTW88_8822BU"
-        check_config "CONFIG_RTW88_8821CU"
         check_config "CONFIG_RTL8XXXU"
         check_config "CONFIG_MT7601U"
         check_config "CONFIG_ATH9K_HTC"
 
         echo "==============================================="
-        echo "[*] Catatan adapter yang didukung in-tree:"
-        echo "    - rtw88: RTL8822BU, RTL8822CU, RTL8821CU, RTL8723DU"
-        echo "    - rtl8xxxu: RTL8188EU, RTL8192EU, RTL8188FU, RTL8723BU"
-        echo "    - mt7601u: MT7601U"
-        echo "    - ath9k_htc: Atheros AR9271, AR7010"
-        echo "    - rt2800usb: Ralink RT5370, RT3070, dll."
-        echo "    - RTL8812AU: TIDAK didukung in-tree, butuh driver eksternal."
+        echo "[*] Adapter didukung in-tree:"
+        echo "    rtw88       : RTL8822BU/CU, RTL8821CU, RTL8723DU"
+        echo "    rtl8xxxu    : RTL8188EU, RTL8192EU, RTL8188FU"
+        echo "    mt7601u     : MT7601U"
+        echo "    ath9k_htc   : AR9271, AR7010"
+        echo "    rt2800usb   : RT5370, RT3070"
+        echo "    [eksternal] : RTL8812AU (dikompilasi setelah kernel)"
         echo "==============================================="
-
-    # =========================================================================
-    # End Kali NetHunter
-    # =========================================================================
 
     - name: Apply ABI Compare Bypass
       if: false
@@ -880,35 +859,11 @@ jobs:
         restore_keys: |
           ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
 
-    - name: Cache ccache (GitHub Native)
-      if: false
-      uses: actions/cache@v6
-      with:
-        path: /home/runner/.ccache
-        key: ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-        restore-keys: |
-          ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-          ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
-          ccache-
-
-    - name: Cache bazel-cache (GitHub Native)
-      if: false
-      uses: actions/cache@v6
-      with:
-        path: /home/runner/.cache/bazel
-        key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-        restore-keys: |
-          bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-          bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
-          bazel-
-
     - name: Check cache hit
       run: |
         echo "Cache restore status:"
-        CCACHE_HIT="${{ steps.restore-ccache.outputs.cache-hit || 'skipped' }}"
-        BAZEL_HIT="${{ steps.restore-bazel.outputs.cache-hit || 'skipped' }}"
-        echo "  ccache: $CCACHE_HIT"
-        echo "  bazel: $BAZEL_HIT"
+        echo "  ccache: ${{ steps.restore-ccache.outputs.cache-hit || 'skipped' }}"
+        echo "  bazel: ${{ steps.restore-bazel.outputs.cache-hit || 'skipped' }}"
 
     - name: Get Cache Stats
       uses: ./.github/actions/cache-stats
@@ -936,6 +891,146 @@ jobs:
         version: ${{ inputs.version }}
         page_size: ${{ inputs.page_size }}
 
+    # =========================================================================
+    # Kali NetHunter — Compile RTL8812AU (after Kleaf build)
+    # =========================================================================
+    - name: Compile RTL8812AU Driver (Kleaf Output)
+      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        WORKSPACE="${{ github.workspace }}"
+        KERNEL_SRC="$WORKSPACE/kernel/common"
+        OUT_DIR="$WORKSPACE/external_modules"
+        mkdir -p "$OUT_DIR"
+
+        echo "==============================================="
+        echo "[*] Mencari Module.symvers dari output Kleaf..."
+        echo "==============================================="
+
+        MODULE_SYMVERS=""
+        for candidate in \
+          "/home/runner/out/dist/Module.symvers" \
+          "/home/runner/out/Module.symvers" \
+          "$KERNEL_SRC/Module.symvers" \
+          "$WORKSPACE/out/Module.symvers"; do
+          if [ -f "$candidate" ]; then
+            MODULE_SYMVERS="$candidate"
+            echo "[+] Ditemukan: $candidate"
+            break
+          fi
+        done
+
+        if [ -z "$MODULE_SYMVERS" ]; then
+          echo "[*] Mencari di seluruh /home/runner/out ..."
+          MODULE_SYMVERS=$(find /home/runner/out -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
+        fi
+
+        if [ -z "$MODULE_SYMVERS" ]; then
+          echo "[!] Module.symvers TIDAK ditemukan. Skip kompilasi driver."
+          echo "[*] Isi /home/runner/out:"
+          ls -la /home/runner/out/ 2>/dev/null || true
+          exit 0
+        fi
+
+        echo "[*] Menggunakan Module.symvers: $MODULE_SYMVERS"
+
+        KERNEL_RELEASE_FILE=$(find /home/runner/out -name "kernel.release" -type f 2>/dev/null | head -1 || true)
+        if [ -n "$KERNEL_RELEASE_FILE" ]; then
+          echo "[*] Kernel release: $(cat "$KERNEL_RELEASE_FILE")"
+        fi
+
+        echo "==============================================="
+        echo "[*] Mengkloning driver RTL8812AU..."
+        echo "==============================================="
+
+        DRIVER_DIR="/tmp/driver-rtl8812au"
+        rm -rf "$DRIVER_DIR"
+        git clone --depth=1 https://github.com/aircrack-ng/rtl8812au.git "$DRIVER_DIR"
+        cd "$DRIVER_DIR"
+
+        # Patch kompatibilitas kernel 6.1
+        echo "[*] Menerapkan patch kompatibilitas kernel 6.1..."
+        if grep -rn "complete_and_exit" . --include="*.c" --include="*.h" 2>/dev/null | grep -v kthread_complete_and_exit; then
+          find . -type f \( -name "*.c" -o -name "*.h" \) -exec \
+            sed -i 's/\bcomplete_and_exit\b/kthread_complete_and_exit/g' {} \;
+          echo "[+] Patch complete_and_exit diterapkan."
+        else
+          echo "[*] Tidak ada complete_and_exit, skip patch."
+        fi
+
+        # Patch CFG80211 API
+        find . -type f -name "*.c" -exec \
+          sed -i 's/\.ndo_select_queue\s*=/\.ndo_select_queue =/g' {} \; 2>/dev/null || true
+
+        echo "==============================================="
+        echo "[*] Mengompilasi driver RTL8812AU..."
+        echo "==============================================="
+
+        export ARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export KBUILD_BUILD_USER=build-user
+        export KBUILD_BUILD_HOST=build-host
+
+        COMPILE_OK=0
+        BUILD_LOG="/tmp/rtl8812au-build.log"
+        : > "$BUILD_LOG"
+
+        # Percobaan 1: KSRC
+        echo "[*] Percobaan 1: KSRC=..."
+        if make -j"$(nproc)" \
+            KSRC="$KERNEL_SRC" \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
+            2>&1 | tee -a "$BUILD_LOG"; then
+          COMPILE_OK=1
+        fi
+
+        # Percobaan 2: KERNELDIR
+        if [ "$COMPILE_OK" -eq 0 ]; then
+          echo "[*] Percobaan 2: KERNELDIR=..."
+          if make -j"$(nproc)" \
+              KERNELDIR="$KERNEL_SRC" \
+              ARCH="$ARCH" \
+              CROSS_COMPILE="$CROSS_COMPILE" \
+              KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
+              2>&1 | tee -a "$BUILD_LOG"; then
+            COMPILE_OK=1
+          fi
+        fi
+
+        # Percobaan 3: -C langsung
+        if [ "$COMPILE_OK" -eq 0 ]; then
+          echo "[*] Percobaan 3: -C ..."
+          if make -j"$(nproc)" \
+              -C "$KERNEL_SRC" \
+              M="$DRIVER_DIR" \
+              ARCH="$ARCH" \
+              CROSS_COMPILE="$CROSS_COMPILE" \
+              KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
+              2>&1 | tee -a "$BUILD_LOG"; then
+            COMPILE_OK=1
+          fi
+        fi
+
+        echo "==============================================="
+        if [ "$COMPILE_OK" -eq 1 ]; then
+          echo "[+] Driver RTL8812AU BERHASIL dikompilasi!"
+          find "$DRIVER_DIR" -name "*.ko" -exec cp {} "$OUT_DIR/" \;
+          echo "[*] Modul yang dihasilkan:"
+          ls -la "$OUT_DIR/"
+        else
+          echo "[!] Driver RTL8812AU GAGAL dikompilasi."
+          echo "[*] 60 baris terakhir dari log:"
+          tail -60 "$BUILD_LOG" || true
+          echo "==============================================="
+          echo "[*] Error spesifik:"
+          grep -iE "error:|undefined|No such file|fatal" "$BUILD_LOG" | head -20 || true
+        fi
+        echo "==============================================="
+
     - name: Get Cache Stats
       uses: ./.github/actions/cache-stats
       with:
@@ -958,7 +1053,7 @@ jobs:
       if: always() && inputs.use_cache && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15')
       with:
         cache_path: /home/runner/.ccache
-        cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}
+        cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}
         cache_bucket: "ccache-cache-${{ inputs.version }}-${{ inputs.variant }}"
         compression_level: 9
         github_token: ${{ github.token }}
@@ -973,6 +1068,115 @@ jobs:
         cache_bucket: "bazel-cache-${{ inputs.version }}-${{ inputs.variant }}${{ inputs.page_size == '16k' && '-16k' || '' }}"
         compression_level: 9
         github_token: ${{ github.token }}
+
+    # =========================================================================
+    # Integrate RTL8812AU Module into AnyKernel3
+    # =========================================================================
+    - name: Integrate RTL8812AU into AnyKernel3
+      if: success() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        ANYDIR="${{ github.workspace }}/AnyKernel3"
+        MODDIR="${{ github.workspace }}/external_modules"
+
+        if [ ! -d "$ANYDIR" ]; then
+          echo "[!] AnyKernel3 tidak ditemukan di $ANYDIR. Skip."
+          exit 0
+        fi
+
+        if [ ! -d "$MODDIR" ] || [ -z "$(ls -A "$MODDIR" 2>/dev/null)" ]; then
+          echo "[*] Tidak ada modul .ko untuk diintegrasikan. Skip."
+          exit 0
+        fi
+
+        echo "==============================================="
+        echo "[*] Mengintegrasikan modul ke AnyKernel3..."
+        echo "==============================================="
+
+        # Cari file .ko
+        KO_FILES=$(find "$MODDIR" -name "*.ko" 2>/dev/null || true)
+        if [ -z "$KO_FILES" ]; then
+          echo "[*] Tidak ada .ko ditemukan di $MODDIR. Skip."
+          exit 0
+        fi
+
+        # Buat folder modules/ di AnyKernel3
+        mkdir -p "$ANYDIR/modules"
+        cp $KO_FILES "$ANYDIR/modules/"
+        echo "[+] Modul disalin:"
+        ls -la "$ANYDIR/modules/"
+
+        # Buat script post-flash untuk insmod otomatis
+        # AnyKernel3 akan otomatis menjalankan file di $ANYDIR/ jika ada post-flash.sh
+        if [ -f "$ANYDIR/post-flash.sh" ]; then
+          echo "[*] post-flash.sh sudah ada, menambahkan insmod ke dalamnya..."
+          cat >> "$ANYDIR/post-flash.sh" << 'EOF'
+
+        # === NetHunter RTL8812AU auto-insmod ===
+        if [ -d "/data/adb/modules" ]; then
+          for ko in /data/adb/modules/*/system/lib/modules/*.ko; do
+            [ -f "$ko" ] && insmod "$ko" 2>/dev/null || true
+          done
+        fi
+        # === End NetHunter ===
+        EOF
+        else
+          echo "[*] Membuat post-flash.sh untuk insmod otomatis..."
+          cat > "$ANYDIR/post-flash.sh" << 'EOF'
+        #!/sbin/sh
+        # Post-flash script untuk Kali NetHunter RTL8812AU
+
+        # Copy module ke /data/adb/modules/ untuk persistensi
+        if [ -d "/data/adb" ]; then
+          MODDIR="/data/adb/modules/nethunter_wifi"
+          mkdir -p "$MODDIR/system/lib/modules"
+          if [ -d "/modules" ]; then
+            cp /modules/*.ko "$MODDIR/system/lib/modules/" 2>/dev/null || true
+          fi
+          cat > "$MODDIR/module.prop" << 'PROP'
+        id=nethunter_wifi
+        name=NetHunter WiFi Drivers
+        version=1.0
+        versionCode=1
+        author=Kali NetHunter
+        description=External WiFi driver for RTL8812AU
+        PROP
+        fi
+
+        # Load module sekarang
+        for ko in /modules/*.ko; do
+          [ -f "$ko" ] && insmod "$ko" 2>/dev/null || true
+        done
+        EOF
+          chmod +x "$ANYDIR/post-flash.sh"
+          echo "[+] post-flash.sh dibuat."
+        fi
+
+        # Update anykernel.sh untuk memanggil post-flash.sh jika belum
+        if [ -f "$ANYDIR/anykernel.sh" ]; then
+          if ! grep -q "post-flash.sh" "$ANYDIR/anykernel.sh"; then
+            echo "[*] Menambahkan referensi post-flash.sh ke anykernel.sh..."
+            # Sisipkan sebelum baris terakhir (biasanya exit 0)
+            sed -i '/^exit 0/i # NetHunter post-flash\nif [ -f "$AKHOME/post-flash.sh" ]; then\n  sh "$AKHOME/post-flash.sh"\nfi\n' "$ANYDIR/anykernel.sh" || true
+          fi
+        fi
+
+        echo "==============================================="
+        echo "[*] Integrasi AnyKernel3 selesai."
+        echo "[*] Struktur AnyKernel3:"
+        find "$ANYDIR" -maxdepth 2 -type f | head -20
+        echo "==============================================="
+
+    - name: Upload RTL8812AU Module
+      if: always() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.extract.outputs.file_name }}-RTL8812AU-Module
+        path: ${{ github.workspace }}/external_modules/
+        if-no-files-found: ignore
+        compression-level: 9
 
     - name: Consolidated Build Summary
       if: always()
@@ -1028,7 +1232,13 @@ jobs:
           SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
         fi
 
-        CCACHE_HIT="${CCACHE_HIT_RATE:-N/A}"
+        RTL8812AU_STATUS="tidak dikompilasi"
+        if [ -d "${{ github.workspace }}/external_modules" ]; then
+          KO_COUNT=$(find "${{ github.workspace }}/external_modules" -name "*.ko" 2>/dev/null | wc -l)
+          if [ "$KO_COUNT" -gt 0 ]; then
+            RTL8812AU_STATUS="$KO_COUNT modul .ko"
+          fi
+        fi
 
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
@@ -1041,14 +1251,12 @@ jobs:
             echo "| **Version String** | \`${KERNEL_VER_STR}\` |"
           fi
           echo "| **KSU Version** | ${KSU_VER} |"
-          echo "| **KSU Tag** | ${KSU_TAG} |"
           echo "| **Root Implementation** | ${ROOT_IMPL} |"
-          echo "| **Root Manager** | ${ROOT_MANAGER} |"
           echo "| **Root Version** | ${ROOT_VERSION} |"
-          echo "| **Root Commit** | ${ROOT_SHA} |"
           echo "| **SUSFS Version** | ${SUSFS_VER} |"
           echo "| **SUSFS Commit** | ${SUSFS_SHA} |"
           echo "| **NoMount Commit** | ${NOMOUNT_SHA} |"
+          echo "| **RTL8812AU** | ${RTL8812AU_STATUS} |"
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
@@ -1078,10 +1286,10 @@ jobs:
         fi
 
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build with root implementation, SUSFS, NoMount, and Kali NetHunter in-tree drivers"
+          METHOD="GKI source build + root + SUSFS + NoMount + Kali NetHunter + RTL8812AU"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build with root implementation, SUSFS, and Kali NetHunter in-tree drivers"
+          METHOD="GKI source build + root + SUSFS + Kali NetHunter + RTL8812AU"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 

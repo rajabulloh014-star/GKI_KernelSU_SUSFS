@@ -405,22 +405,14 @@ jobs:
           "$NH_REPO"
 
         case "$KVER" in
-          4.4|4.9|4.14|4.19|5.4)
-            PATCH_DIR="patches/${KVER}"
-            ;;
-          5.10|5.15|6.1|6.6|6.12)
-            PATCH_DIR="adapted/${KVER}"
-            ;;
-          *)
-            echo "[-] Kernel $KVER belum didukung patch NetHunter. Skip."
-            exit 0
-            ;;
+          4.4|4.9|4.14|4.19|5.4) PATCH_DIR="patches/${KVER}" ;;
+          5.10|5.15|6.1|6.6|6.12) PATCH_DIR="adapted/${KVER}" ;;
+          *) echo "[-] Kernel $KVER belum didukung. Skip."; exit 0 ;;
         esac
 
         PATCH_PATH="$NH_REPO/$PATCH_DIR"
         if [ ! -d "$PATCH_PATH" ]; then
           echo "[-] Direktori $PATCH_PATH tidak ada. Skip."
-          ls -la "$NH_REPO" || true
           exit 0
         fi
 
@@ -438,14 +430,13 @@ jobs:
             echo "[+] OK"
             APPLIED=$((APPLIED + 1))
           else
-            echo "[!] Konflik pada $(basename "$patch") — mencatat ke patch-rejects/"
+            echo "[!] Konflik pada $(basename "$patch")"
             git -C "$KERNEL_SRC" apply --reject --whitespace=nowarn "$patch" || true
             cp "$patch" "$WORKSPACE/patch-rejects/" 2>/dev/null || true
             FAILED=$((FAILED + 1))
           fi
         done
 
-        echo "==============================================="
         echo "[*] Ringkasan: $APPLIED patch berhasil, $FAILED patch gagal."
 
         NH_CONFIG="$NH_REPO/config/GKI-nethunter.config"
@@ -463,8 +454,7 @@ jobs:
         echo "[+] Kali NetHunter patch step selesai."
 
     # =========================================================================
-    # Kali NetHunter — Full Feature Configs
-    # (HID, USB Gadget, Bluetooth RFCOMM, SDR, CAN bus, NFC, Netfilter)
+    # Kali NetHunter — Full Feature Configs (In-Tree Drivers Only)
     # =========================================================================
     - name: Apply NetHunter Full Feature Configs
       if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
@@ -477,7 +467,7 @@ jobs:
         cat >> "$FRAGMENT" << 'NETCONFIG'
 
         # =====================================================================
-        # Kali NetHunter — Full Feature Configs (auto-generated)
+        # Kali NetHunter — Full Feature Configs (auto-generated, in-tree only)
         # =====================================================================
 
         # --- Wi-Fi Injection & Monitor Mode ---
@@ -489,7 +479,6 @@ jobs:
         CONFIG_RFKILL=y
         CONFIG_RFKILL_INPUT=y
         CONFIG_CFG80211_WEXT=y
-        CONFIG_CFG80211_INTERNAL_REGDB=y
 
         # --- USB HID (BadUSB / Keyboard Injection) ---
         CONFIG_USB_HID=y
@@ -519,7 +508,7 @@ jobs:
         CONFIG_USB_DWC3_GADGET=y
         CONFIG_USB_LIBCOMPOSITE=y
 
-        # --- USB Host (External Wi-Fi, 4G, Bluetooth) ---
+        # --- USB Host (External Wi-Fi, 4G, Bluetooth, Serial) ---
         CONFIG_USB_ACM=y
         CONFIG_USB_ETH=y
         CONFIG_USB_NCM=y
@@ -577,7 +566,7 @@ jobs:
         CONFIG_NFC_ST21NFCA=y
         CONFIG_NFC_ST_NCI=y
 
-        # --- Netfilter / NAT / Traffic Redirection ---
+        # --- Netfilter / NAT / MITM ---
         CONFIG_NETFILTER=y
         CONFIG_NETFILTER_ADVANCED=y
         CONFIG_NETFILTER_XTABLES=y
@@ -610,7 +599,7 @@ jobs:
         CONFIG_NETFILTER_XT_MATCH_HL=y
         CONFIG_NETFILTER_XT_MATCH_OWNER=y
 
-        # --- Bridge (MITM Bridge Attacks) ---
+        # --- Bridge / Ebtables ---
         CONFIG_BRIDGE=y
         CONFIG_BRIDGE_NETFILTER=y
         CONFIG_BRIDGE_NF_EBTABLES=y
@@ -630,7 +619,7 @@ jobs:
         CONFIG_BRIDGE_EBT_ARPREPLY=y
         CONFIG_BRIDGE_EBT_NFLOG=y
 
-        # --- Filesystem (NFS, FUSE, overlay) ---
+        # --- Filesystem ---
         CONFIG_NFS_FS=y
         CONFIG_NFS_V3=y
         CONFIG_NFS_V3_ACL=y
@@ -648,7 +637,7 @@ jobs:
         CONFIG_ANDROID_BINDER_IPC=y
         CONFIG_ANDROID_BINDERFS=y
 
-        # --- Debug / Info Export (NetHunter tools) ---
+        # --- Debug / Info Export ---
         CONFIG_IKCONFIG=y
         CONFIG_IKCONFIG_PROC=y
         CONFIG_DEVPORT=y
@@ -668,7 +657,6 @@ jobs:
         CONFIG_NETFILTER_NETLINK=y
         CONFIG_NETFILTER_NETLINK_LOG=y
         CONFIG_NETFILTER_NETLINK_QUEUE=y
-        CONFIG_NFNETLINK_QUEUE=y
         CONFIG_INET6_AH=y
         CONFIG_INET6_ESP=y
         CONFIG_INET6_IPCOMP=y
@@ -679,13 +667,63 @@ jobs:
         CONFIG_VLAN_8021Q=y
         CONFIG_IP_MULTIPLE_TABLES=y
 
-        # --- External Wi-Fi Drivers (as modules) ---
-        CONFIG_RTL8821AU=m
-        CONFIG_RTL8812AU=m
-        CONFIG_RTL8XXXU=m
+        # --- In-Tree Wi-Fi USB Drivers (built as modules) ---
+        # rtw88 family (Realtek 802.11ac)
         CONFIG_RTW88=m
+        CONFIG_RTW88_CORE=m
+        CONFIG_RTW88_PCI=m
+        CONFIG_RTW88_USB=m
+        CONFIG_RTW88_8822BU=m
+        CONFIG_RTW88_8822CU=m
+        CONFIG_RTW88_8821CU=m
+        CONFIG_RTW88_8723DU=m
+        CONFIG_RTW88_8723DE=m
+        CONFIG_RTW88_8822BE=m
+        CONFIG_RTW88_8822CE=m
+        CONFIG_RTW88_8821CE=m
+        CONFIG_RTW88_8723DS=m
+        CONFIG_RTW88_DEBUG=y
 
-        # --- SELinux (permissive debug) ---
+        # rtl8xxxu family (Realtek 802.11n USB)
+        CONFIG_RTL8XXXU=m
+        CONFIG_RTL8XXXU_UNTESTED=y
+
+        # Staging Realtek drivers
+        CONFIG_R8188EU=m
+        CONFIG_R8712U=m
+
+        # MediaTek USB
+        CONFIG_MT7601U=m
+        CONFIG_MT76x0U=m
+        CONFIG_MT76x2U=m
+        CONFIG_MT76x0_COMMON=m
+        CONFIG_MT76x2_COMMON=m
+        CONFIG_MT76_USB=m
+        CONFIG_MT76_CORE=m
+
+        # Atheros USB
+        CONFIG_ATH9K_HTC=m
+        CONFIG_ATH9K_HTC_DEBUGFS=y
+        CONFIG_CARL9170=m
+        CONFIG_ATH6KL=m
+        CONFIG_ATH6KL_USB=m
+
+        # Zydas
+        CONFIG_ZD1211RW=m
+
+        # Ralink
+        CONFIG_RT2X00=m
+        CONFIG_RT2500USB=m
+        CONFIG_RT73USB=m
+        CONFIG_RT2800USB=m
+        CONFIG_RT2800USB_RT33XX=y
+        CONFIG_RT2800USB_RT35XX=y
+        CONFIG_RT2800USB_RT3573=y
+        CONFIG_RT2800USB_RT53XX=y
+        CONFIG_RT2800USB_RT55XX=y
+        CONFIG_RT2800USB_UNKNOWN=y
+
+        # --- SELinux ---
         CONFIG_SECURITY_SELINUX=y
         CONFIG_SECURITY_SELINUX_DEVELOP=y
 
@@ -695,66 +733,6 @@ jobs:
         echo "[+] NetHunter full feature configs appended to $FRAGMENT"
 
     # =========================================================================
-    # Kali NetHunter — Build External Wi-Fi Drivers
-    # (RTL8812AU, RTL8188EUS, RTL88x2BU)
-    # =========================================================================
-    - name: Build External Wi-Fi Drivers
-      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        WORKSPACE="${{ github.workspace }}"
-        KERNEL_SRC="$WORKSPACE/kernel/common"
-        ARCH="arm64"
-        CROSS_COMPILE="aarch64-linux-gnu-"
-        OUT_DIR="$WORKSPACE/external_modules"
-        mkdir -p "$OUT_DIR"
-
-        export ARCH CROSS_COMPILE
-
-        # ---- Helper: build a driver ----
-        build_driver() {
-          local NAME="$1"
-          local REPO="$2"
-          local DIR="/tmp/driver-${NAME}"
-          echo "==============================================="
-          echo "[*] Building driver: $NAME"
-          rm -rf "$DIR"
-          if ! git clone --depth=1 "$REPO" "$DIR"; then
-            echo "[!] Gagal clone $REPO — skip."
-            return 1
-          fi
-          cd "$DIR"
-          # Beberapa driver memakai Makefile dengan KSRC / KERNEL_DIR
-          if make KSRC="$KERNEL_SRC" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)"; then
-            find "$DIR" -name "*.ko" -exec cp {} "$OUT_DIR/" \;
-            echo "[+] $NAME berhasil dikompilasi."
-          else
-            echo "[!] $NAME gagal dikompilasi — cek log di atas."
-            return 1
-          fi
-          cd "$WORKSPACE"
-          return 0
-        }
-
-        # ---- RTL8812AU (AC1200/AC600) ----
-        build_driver "rtl8812au" \
-          "https://github.com/aircrack-ng/rtl8812au.git" || true
-
-        # ---- RTL8188EUS (N150 mini) ----
-        build_driver "rtl8188eus" \
-          "https://github.com/gglluukk/rtl8188eus.git" || true
-
-        # ---- RTL88x2BU (AC1200 USB) ----
-        build_driver "rtl88x2bu" \
-          "https://github.com/morrownr/88x2bu-20210702.git" || true
-
-        echo "==============================================="
-        echo "[*] Modul yang berhasil dikompilasi:"
-        ls -la "$OUT_DIR" || true
-
-    # =========================================================================
     # Kali NetHunter — Verify Features
     # =========================================================================
     - name: Verify NetHunter Features
@@ -762,20 +740,18 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        WORKSPACE="${{ github.workspace }}"
-        KERNEL_SRC="$WORKSPACE/kernel/common"
-        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+        FRAGMENT="${{ github.workspace }}/wild_gki.fragment"
 
         echo "==============================================="
-        echo "[*] Verifikasi fitur NetHunter:"
+        echo "[*] Verifikasi config NetHunter (in-tree):"
         echo "==============================================="
 
         check_config() {
           local cfg="$1"
           if grep -q "^${cfg}=" "$FRAGMENT" 2>/dev/null; then
-            echo "  [+] $cfg (ada di fragment)"
+            echo "  [+] $cfg"
           else
-            echo "  [-] $cfg (TIDAK ditemukan di fragment)"
+            echo "  [-] $cfg"
           fi
         }
 
@@ -785,7 +761,6 @@ jobs:
 
         echo "--- USB HID ---"
         check_config "CONFIG_USB_CONFIGFS_F_HID"
-        check_config "CONFIG_USB_HID"
         check_config "CONFIG_HIDRAW"
 
         echo "--- Bluetooth RFCOMM ---"
@@ -797,19 +772,27 @@ jobs:
 
         echo "--- CAN Bus ---"
         check_config "CONFIG_CAN"
-        check_config "CONFIG_CAN_RAW"
 
         echo "--- Netfilter ---"
         check_config "CONFIG_NF_NAT"
-        check_config "CONFIG_IP_NF_TARGET_MASQUERADE"
 
-        echo "--- External Wi-Fi Modules ---"
-        if [ -d "$WORKSPACE/external_modules" ]; then
-          ls -la "$WORKSPACE/external_modules/" || true
-        fi
+        echo "--- In-Tree Wi-Fi Drivers ---"
+        check_config "CONFIG_RTW88_USB"
+        check_config "CONFIG_RTW88_8822BU"
+        check_config "CONFIG_RTW88_8821CU"
+        check_config "CONFIG_RTL8XXXU"
+        check_config "CONFIG_MT7601U"
+        check_config "CONFIG_ATH9K_HTC"
 
         echo "==============================================="
-        echo "[*] Verifikasi selesai."
+        echo "[*] Catatan adapter yang didukung in-tree:"
+        echo "    - rtw88: RTL8822BU, RTL8822CU, RTL8821CU, RTL8723DU"
+        echo "    - rtl8xxxu: RTL8188EU, RTL8192EU, RTL8188FU, RTL8723BU"
+        echo "    - mt7601u: MT7601U"
+        echo "    - ath9k_htc: Atheros AR9271, AR7010"
+        echo "    - rt2800usb: Ralink RT5370, RT3070, dll."
+        echo "    - RTL8812AU: TIDAK didukung in-tree, butuh driver eksternal."
+        echo "==============================================="
 
     # =========================================================================
     # End Kali NetHunter
@@ -861,15 +844,6 @@ jobs:
       with:
         name: ${{ steps.extract.outputs.file_name }}-Rejects
         path: patch-rejects/
-        if-no-files-found: ignore
-        compression-level: 9
-
-    - name: Upload External Wi-Fi Modules
-      if: always() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
-      uses: actions/upload-artifact@v7
-      with:
-        name: ${{ steps.extract.outputs.file_name }}-External-WiFi-Modules
-        path: ${{ github.workspace }}/external_modules/
         if-no-files-found: ignore
         compression-level: 9
 
@@ -984,7 +958,7 @@ jobs:
       if: always() && inputs.use_cache && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15')
       with:
         cache_path: /home/runner/.ccache
-        cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}
+        cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}
         cache_bucket: "ccache-cache-${{ inputs.version }}-${{ inputs.variant }}"
         compression_level: 9
         github_token: ${{ github.token }}
@@ -1055,8 +1029,6 @@ jobs:
         fi
 
         CCACHE_HIT="${CCACHE_HIT_RATE:-N/A}"
-        BUILD_TIME="N/A"
-        WARNINGS="N/A"
 
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
@@ -1081,12 +1053,6 @@ jobs:
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
           echo
-
-          if [ -f /tmp/kernel-fixes-summary.md ]; then
-            echo "### Kernel Fixes"
-            cat /tmp/kernel-fixes-summary.md
-            echo
-          fi
         } > "$SUMMARY_FILE"
 
     - name: Upload Artifacts
@@ -1112,10 +1078,10 @@ jobs:
         fi
 
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build with SHA-pinned root implementation, SUSFS, NoMount, and Kali NetHunter"
+          METHOD="GKI source build with root implementation, SUSFS, NoMount, and Kali NetHunter in-tree drivers"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build with SHA-pinned root implementation, SUSFS, and Kali NetHunter"
+          METHOD="GKI source build with root implementation, SUSFS, and Kali NetHunter in-tree drivers"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 
@@ -1134,30 +1100,23 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             page=1
             match=""
-
             while :; do
               curl --fail --silent --show-error --location \
                 --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 \
                 --header "Authorization: Bearer ${GH_TOKEN}" \
                 --header "X-GitHub-Api-Version: 2022-11-28" \
                 "${artifacts_api}&page=${page}" -o "$page_file"
-
               match="$(jq -r --arg name "$artifact_name" \
                 '[.artifacts[] | select(.name == $name and .expired == false)] | .[0]
                  | if . == null then "" else (.archive_download_url + "\t" + .digest) end' \
                 "$page_file")"
-
               items="$(jq '(.artifacts | length) // 0' "$page_file")"
               if [ "$items" -lt 100 ] || [ -n "$match" ]; then
                 break
               fi
               page=$((page + 1))
             done
-
-            if [ -n "$match" ]; then
-              break
-            fi
-            echo "  artifact '$artifact_name' not listed yet (attempt ${attempt}/6); re-querying in 10s" >&2
+            if [ -n "$match" ]; then break; fi
             sleep 10
           done
 
@@ -1206,12 +1165,7 @@ jobs:
           --arg boot "not-guaranteed" \
           '{
             method: $method,
-            root: {
-              implementation: $root_implementation,
-              manager: $root_manager,
-              version: $root_version,
-              commit: $root_commit
-            },
+            root: {implementation: $root_implementation, manager: $root_manager, version: $root_version, commit: $root_commit},
             susfs_revision: $susfs_commit,
             nomount_commit: $nomount_commit,
             android_branch: $android_branch,
@@ -1221,17 +1175,8 @@ jobs:
             provenance_url: $provenance_url,
             artifact_url: $artifact_url,
             sha256: $sha256,
-            nomount_metamodule: {
-              commit: $nomount_module_commit,
-              artifact_url: $nomount_module_url,
-              sha256: $nomount_module_sha256
-            },
-            catalog: {
-              availability: $catalog_availability,
-              device_compatibility: $device_compatibility,
-              flashability: $flashability,
-              boot: $boot
-            },
+            nomount_metamodule: {commit: $nomount_module_commit, artifact_url: $nomount_module_url, sha256: $nomount_module_sha256},
+            catalog: {availability: $catalog_availability, device_compatibility: $device_compatibility, flashability: $flashability, boot: $boot},
             status: $status
           }' > "$metadata_file"
 
@@ -1248,21 +1193,6 @@ jobs:
           .catalog.flashability == "not-guaranteed" and
           .catalog.boot == "not-guaranteed"
         ' "$metadata_file" > /dev/null
-        if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          jq -e '
-            (.nomount_commit | test("^[0-9a-f]{40}$")) and
-            (.nomount_metamodule.commit == .nomount_commit) and
-            (.nomount_metamodule.artifact_url | startswith("https://")) and
-            (.nomount_metamodule.sha256 | test("^sha256:[0-9a-f]{64}$"))
-          ' "$metadata_file" > /dev/null
-        else
-          jq -e '
-            (.nomount_commit == "N/A") and
-            (.nomount_metamodule.commit == "N/A") and
-            (.nomount_metamodule.artifact_url == "N/A") and
-            (.nomount_metamodule.sha256 == "N/A")
-          ' "$metadata_file" > /dev/null
-        fi
 
         {
           echo

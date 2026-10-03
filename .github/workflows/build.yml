@@ -160,6 +160,42 @@ jobs:
         kernel_version: ${{ inputs.kernel_version }}
         os_patch_level: ${{ inputs.os_patch_level }}
 
+    - name: Patch Kali NetHunter Jaringan & USB Gadget (Khusus Kernel 6.1)
+      if: inputs.kernel_version == '6.1'
+      shell: bash
+      run: |
+        set -euo pipefail
+        
+        # Masuk ke workspace kernel utama GKI
+        cd ${{ github.workspace }}/kernel/common
+        
+        echo "==== Mengunduh Patch NetHunter dari wumingzhinu ===="
+        git clone https://github.com $HOME/nethunter-patches
+        
+        echo "==== Menerapkan Patch ke Source Kernel 6.1 ===="
+        bash $HOME/nethunter-patches/apply-nethunter-patches.sh .
+        
+        echo "==== Menyuntikkan Konfigurasi NetHunter ke gki_defconfig ===="
+        DEFCONFIG_PATH="arch/arm64/configs/gki_defconfig"
+        
+        if [ -f "$DEFCONFIG_PATH" ]; then
+          {
+            echo ""
+            echo "# Kali NetHunter Configurations"
+            echo "CONFIG_AUTO_WIFI_INJECTION=y"
+            echo "CONFIG_WIFI_MONITOR_MODE=y"
+            echo "CONFIG_USB_GADGET=y"
+            echo "CONFIG_USB_G_ANDROID=y"
+            echo "CONFIG_USB_CONFIGFS=y"
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_USB_CONFIGFS_F_DIAG=y"
+            echo "CONFIG_USB_CONFIGFS_F_CDEV=y"
+          } >> "$DEFCONFIG_PATH"
+          echo "[Selesai] Konfigurasi NetHunter berhasil digabungkan ke $DEFCONFIG_PATH!"
+        else
+          echo "[Error] File gki_defconfig tidak ditemukan di jalur $DEFCONFIG_PATH!" && exit 1
+        fi
+
     - name: Set Build Timestamp from Kernel Commit
       shell: bash
       run: |

@@ -412,6 +412,102 @@ jobs:
         commit: ${{ inputs.nomount_commit }}
         kernel_version: ${{ inputs.kernel_version }}
 
+    # =========================================================================
+    # Kali NetHunter Kernel Patches
+    # Diterapkan setelah SUSFS/NoMount/Networking, sebelum branding & build.
+    # Diaktifkan bersama feature_set 'NET' atau 'All'.
+    # =========================================================================
+    - name: Apply Kali NetHunter Kernel Patches
+      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        KVER="${{ inputs.kernel_version }}"
+        WORKSPACE="${{ github.workspace }}"
+
+        # Deteksi direktori source kernel (GKI memakai common/, legacy tidak)
+        if [ -d "$WORKSPACE/kernel/common" ]; then
+          KERNEL_SRC="$WORKSPACE/kernel/common"
+        elif [ -d "$WORKSPACE/kernel" ]; then
+          KERNEL_SRC="$WORKSPACE/kernel"
+        else
+          echo "[-] Tidak menemukan source kernel di $WORKSPACE/kernel"
+          exit 0
+        fi
+        echo "[*] KERNEL_SRC = $KERNEL_SRC"
+
+        # 1) Kloning repo patch NetHunter
+        NH_REPO="/tmp/nethunter-patches"
+        rm -rf "$NH_REPO"
+        git clone --depth=1 \
+          https://github.com/wumingzhinu/kali-nethunter-kernel-patches.git \
+          "$NH_REPO"
+
+        cd "$NH_REPO"
+
+        # 2) Pilih direktori patch sesuai versi kernel
+        case "$KVER" in
+          4.4|4.9|4.14|4.19|5.4)
+            PATCH_DIR="patches/${KVER}"
+            ;;
+          5.10|5.15|6.1|6.6|6.12)
+            PATCH_DIR="adapted/${KVER}"
+            ;;
+          *)
+            echo "[-] Kernel $KVER belum didukung patch NetHunter. Skip."
+            exit 0
+            ;;
+        esac
+
+        if [ ! -d "$PATCH_DIR" ]; then
+          echo "[-] Direktori $PATCH_DIR tidak ada. Skip."
+          exit 0
+        fi
+
+        echo "[*] Menggunakan patch dari: $PATCH_DIR"
+
+        # 3) Terapkan setiap .patch
+        mkdir -p "$WORKSPACE/patch-rejects"
+        FAILED=0
+        for patch in "$PATCH_DIR"/*.patch; do
+          [ -e "$patch" ] || continue
+          echo "==============================================="
+          echo "[*] Applying: $(basename "$patch")"
+          if git -C "$KERNEL_SRC" apply --3way --whitespace=nowarn "$patch"; then
+            echo "[+] OK"
+          else
+            echo "[!] Konflik pada $(basename "$patch") — mencatat ke patch-rejects/"
+            git -C "$KERNEL_SRC" apply --reject --whitespace=nowarn "$patch" || true
+            cp "$patch" "$WORKSPACE/patch-rejects/" 2>/dev/null || true
+            FAILED=1
+          fi
+        done
+
+        if [ "$FAILED" -eq 1 ]; then
+          echo "[!] Ada patch NetHunter yang konflik. Cek artifact 'Rejects'."
+        fi
+
+        # 4) Sisipkan config NetHunter ke fragment build
+        NH_CONFIG="$NH_REPO/config/GKI-nethunter.config"
+        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+        if [ -f "$NH_CONFIG" ]; then
+          echo "[*] Menambahkan config NetHunter ke $FRAGMENT"
+          {
+            echo ""
+            echo "# === Kali NetHunter configs ==="
+            cat "$NH_CONFIG"
+            echo "# === End Kali NetHunter configs ==="
+          } >> "$FRAGMENT"
+        else
+          echo "[!] GKI-nethunter.config tidak ditemukan, skip config."
+        fi
+
+        echo "[+] Kali NetHunter patch step selesai."
+    # =========================================================================
+    # End Kali NetHunter Kernel Patches
+    # =========================================================================
+
     - name: Apply ABI Compare Bypass
       if: false
       working-directory: ${{ github.workspace }}/kernel

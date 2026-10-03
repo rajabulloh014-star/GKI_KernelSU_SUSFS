@@ -444,8 +444,6 @@ jobs:
           https://github.com/wumingzhinu/kali-nethunter-kernel-patches.git \
           "$NH_REPO"
 
-        cd "$NH_REPO"
-
         # 2) Pilih direktori patch sesuai versi kernel
         case "$KVER" in
           4.4|4.9|4.14|4.19|5.4)
@@ -460,31 +458,40 @@ jobs:
             ;;
         esac
 
-        if [ ! -d "$PATCH_DIR" ]; then
-          echo "[-] Direktori $PATCH_DIR tidak ada. Skip."
+        PATCH_PATH="$NH_REPO/$PATCH_DIR"
+        if [ ! -d "$PATCH_PATH" ]; then
+          echo "[-] Direktori $PATCH_PATH tidak ada. Skip."
+          echo "[*] Isi $NH_REPO:"
+          ls -la "$NH_REPO" || true
           exit 0
         fi
 
         echo "[*] Menggunakan patch dari: $PATCH_DIR"
+        echo "[*] Isi direktori patch:"
+        ls -la "$PATCH_PATH" || true
 
-        # 3) Terapkan setiap .patch
+        # 3) Terapkan setiap .patch (path ABSOLUT supaya git apply bisa membukanya)
         mkdir -p "$WORKSPACE/patch-rejects"
         FAILED=0
-        for patch in "$PATCH_DIR"/*.patch; do
+        APPLIED=0
+        for patch in "$PATCH_PATH"/*.patch; do
           [ -e "$patch" ] || continue
           echo "==============================================="
           echo "[*] Applying: $(basename "$patch")"
           if git -C "$KERNEL_SRC" apply --3way --whitespace=nowarn "$patch"; then
             echo "[+] OK"
+            APPLIED=$((APPLIED + 1))
           else
             echo "[!] Konflik pada $(basename "$patch") — mencatat ke patch-rejects/"
             git -C "$KERNEL_SRC" apply --reject --whitespace=nowarn "$patch" || true
             cp "$patch" "$WORKSPACE/patch-rejects/" 2>/dev/null || true
-            FAILED=1
+            FAILED=$((FAILED + 1))
           fi
         done
 
-        if [ "$FAILED" -eq 1 ]; then
+        echo "==============================================="
+        echo "[*] Ringkasan: $APPLIED patch berhasil, $FAILED patch gagal."
+        if [ "$FAILED" -gt 0 ]; then
           echo "[!] Ada patch NetHunter yang konflik. Cek artifact 'Rejects'."
         fi
 

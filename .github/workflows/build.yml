@@ -416,9 +416,7 @@ jobs:
         echo "==============================================="
         REKERNEL_MAKEFILE="$REKERNEL_DST/Makefile"
         if [ -f "$REKERNEL_MAKEFILE" ]; then
-          # Ubah dari modul eksternal (obj-m) menjadi in-tree (obj-y)
           sed -i 's/^obj-m := rekernel\.o$/obj-$(CONFIG_REKERNEL) += rekernel.o/' "$REKERNEL_MAKEFILE"
-          # Tambah legacy netlink flag
           grep -qF 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' "$REKERNEL_MAKEFILE" || \
             echo 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' >> "$REKERNEL_MAKEFILE"
           echo "[+] Makefile diadaptasi"
@@ -426,7 +424,6 @@ jobs:
           echo "[!] Makefile tidak ditemukan di $REKERNEL_DST"
         fi
 
-        # Hapus 'depends on MODULES' dari Kconfig agar bisa built-in
         if [ -f "$REKERNEL_DST/Kconfig" ]; then
           sed -i '/^[[:space:]]*depends on MODULES[[:space:]]*$/d' "$REKERNEL_DST/Kconfig"
           echo "[+] Kconfig diadaptasi"
@@ -452,13 +449,11 @@ jobs:
         echo "==============================================="
         echo "[*] Memperbaiki include paths untuk in-tree build..."
         echo "==============================================="
-        # Fix relative include untuk binder_internal.h
         for f in "$REKERNEL_DST"/*.c; do
           [ -f "$f" ] || continue
           sed -i 's|#include <../android/binder_internal.h>|#include "../android/binder_internal.h"|g' "$f" 2>/dev/null || true
         done
 
-        # Tambah seq_file.h jika belum ada (dibutuhkan DEFINE_SHOW_ATTRIBUTE)
         for f in "$REKERNEL_DST"/*.c; do
           [ -f "$f" ] || continue
           if ! grep -qF '#include <linux/seq_file.h>' "$f"; then
@@ -483,6 +478,99 @@ jobs:
         echo "[+] Re:Kernel berhasil diintegrasikan."
     # =========================================================================
     # End Re:Kernel
+    # =========================================================================
+
+    # =========================================================================
+    # SSG I/O Scheduler — SamSung Generic (kernel 6.1 compatible)
+    # =========================================================================
+    - name: Apply SSG I/O Scheduler
+      if: contains(inputs.feature_set, 'SSG') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        WORKSPACE="${{ github.workspace }}"
+        if [ -d "$WORKSPACE/kernel/common" ]; then
+          KERNEL_SRC="$WORKSPACE/kernel/common"
+        else
+          KERNEL_SRC="$WORKSPACE/kernel"
+        fi
+        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+
+        echo "==============================================="
+        echo "[*] Mengintegrasikan SSG I/O Scheduler..."
+        echo "==============================================="
+
+        # Jika SSG sudah ada di source kernel (mis. dari vendor), skip cloning
+        if [ -f "$KERNEL_SRC/block/ssg-iosched.c" ]; then
+          echo "[*] SSG sudah ada di source kernel, skip clone."
+        else
+          echo "[*] Mengkloning SSG source (cctv18 kernel 6.1)..."
+          TMP_SSG=/tmp/ssg-src
+          rm -rf "$TMP_SSG"
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/cctv18/android_kernel_common_oneplus_sm8650.git "$TMP_SSG" || {
+              echo "::warning::Gagal clone SSG source, skip."
+              exit 0
+            }
+          cd "$TMP_SSG"
+          git sparse-checkout set block 2>/dev/null || true
+          cd - > /dev/null
+
+          SSG_FOUND=0
+          for f in ssg-iosched.c ssg-cgroup.c ssg-iosched.h ssg.h; do
+            if [ -f "$TMP_SSG/block/$f" ]; then
+              cp "$TMP_SSG/block/$f" "$KERNEL_SRC/block/"
+              echo "[+] Copied $f"
+              SSG_FOUND=1
+            fi
+          done
+
+          if [ "$SSG_FOUND" -eq 0 ]; then
+            echo "::warning::SSG source tidak ditemukan di repo cctv18."
+            find "$TMP_SSG/block" -maxdepth 1 -name "ssg*" -type f -exec cp {} "$KERNEL_SRC/block/" \; 2>/dev/null || true
+          fi
+        fi
+
+        # Adaptasi Kconfig
+        if ! grep -q 'MQ_IOSCHED_SSG' "$KERNEL_SRC/block/Kconfig"; then
+          echo "[*] Menambahkan entri SSG ke block/Kconfig..."
+          sed -i '/^endmenu$/i \
+        config MQ_IOSCHED_SSG\
+            tristate "SamSung Generic I/O scheduler"\
+            default y\
+            help\
+              SamSung Generic IO scheduler.\
+        \
+        config MQ_IOSCHED_SSG_CGROUP\
+            tristate "Control Group for SamSung Generic I/O scheduler"\
+            depends on BLK_CGROUP\
+            depends on MQ_IOSCHED_SSG\
+            help\
+              Control Group for SamSung Generic IO scheduler.\
+        ' "$KERNEL_SRC/block/Kconfig"
+        fi
+
+        # Adaptasi Makefile
+        if ! grep -q 'CONFIG_MQ_IOSCHED_SSG' "$KERNEL_SRC/block/Makefile"; then
+          echo 'obj-$(CONFIG_MQ_IOSCHED_SSG) += ssg-iosched.o' >> "$KERNEL_SRC/block/Makefile"
+          echo 'obj-$(CONFIG_MQ_IOSCHED_SSG_CGROUP) += ssg-cgroup.o' >> "$KERNEL_SRC/block/Makefile"
+          echo "[+] block/Makefile updated."
+        fi
+
+        # Tambah config ke fragment
+        {
+          echo ""
+          echo "# === SSG I/O Scheduler configs ==="
+          echo "CONFIG_MQ_IOSCHED_SSG=y"
+          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y"
+          echo "CONFIG_MQ_SSG_DEFAULT=y"
+          echo "# === End SSG I/O Scheduler configs ==="
+        } >> "$FRAGMENT"
+
+        echo "[+] SSG I/O Scheduler berhasil diintegrasikan."
+    # =========================================================================
+    # End SSG I/O Scheduler
     # =========================================================================
 
     # =========================================================================
@@ -874,6 +962,8 @@ jobs:
         check_config "CONFIG_ATH9K_HTC"
         echo "--- Re:Kernel ---"
         check_config "CONFIG_REKERNEL"
+        echo "--- SSG I/O Scheduler ---"
+        check_config "CONFIG_MQ_IOSCHED_SSG"
         echo "==============================================="
 
     - name: Apply ABI Compare Bypass
@@ -1087,6 +1177,11 @@ jobs:
           REKERNEL_ENABLED="true"
         fi
 
+        SSG_ENABLED="false"
+        if [ "${{ contains(inputs.feature_set, 'SSG') || inputs.feature_set == 'All' }}" = "true" ]; then
+          SSG_ENABLED="true"
+        fi
+
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
           echo
@@ -1104,6 +1199,7 @@ jobs:
           echo "| **SUSFS Commit** | ${SUSFS_SHA} |"
           echo "| **NoMount Commit** | ${NOMOUNT_SHA} |"
           echo "| **Re:Kernel** | ${REKERNEL_ENABLED} |"
+          echo "| **SSG I/O Scheduler** | ${SSG_ENABLED} |"
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
@@ -1137,11 +1233,16 @@ jobs:
           REKERNEL_ENABLED="true"
         fi
 
+        SSG_ENABLED="false"
+        if [ "${{ contains(inputs.feature_set, 'SSG') || inputs.feature_set == 'All' }}" = "true" ]; then
+          SSG_ENABLED="true"
+        fi
+
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build + root + SUSFS + NoMount + Re:Kernel + Kali NetHunter"
+          METHOD="GKI source build + root + SUSFS + NoMount + Re:Kernel + SSG + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build + root + SUSFS + Re:Kernel + Kali NetHunter"
+          METHOD="GKI source build + root + SUSFS + Re:Kernel + SSG + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 
@@ -1209,6 +1310,7 @@ jobs:
           --arg susfs_commit "${SUSFS_COMMIT:-N/A}" \
           --arg nomount_commit "${NOMOUNT_COMMIT:-N/A}" \
           --arg rekernel_enabled "$REKERNEL_ENABLED" \
+          --arg ssg_enabled "$SSG_ENABLED" \
           --arg android_branch "${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}" \
           --arg kmi "${{ inputs.android_version }}-${{ inputs.kernel_version }}" \
           --arg page_size "${{ inputs.page_size }}" \
@@ -1230,6 +1332,7 @@ jobs:
             susfs_revision: $susfs_commit,
             nomount_commit: $nomount_commit,
             rekernel_enabled: $rekernel_enabled,
+            ssg_enabled: $ssg_enabled,
             android_branch: $android_branch,
             kmi: $kmi,
             page_size: $page_size,

@@ -377,7 +377,7 @@ jobs:
         kernel_version: ${{ inputs.kernel_version }}
 
     # =========================================================================
-    # Re:Kernel — Tombstone Kernel Support
+    # Re:Kernel — Sakion-Team Approach (tanpa Coccinelle)
     # =========================================================================
     - name: Apply Re:Kernel
       if: contains(inputs.feature_set, 'ReKernel') || inputs.feature_set == 'All'
@@ -391,134 +391,99 @@ jobs:
         else
           KERNEL_SRC="$WORKSPACE/kernel"
         fi
+        FRAGMENT="$WORKSPACE/wild_gki.fragment"
 
         echo "==============================================="
-        echo "[*] Menginstall dependensi Re:Kernel..."
+        echo "[*] Mengkloning Re-Kernel (Sakion-Team)..."
         echo "==============================================="
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq aria2 wget tar
-
-        # --- Install Coccinelle versi baru dari GitHub releases ---
-        echo "[*] Menginstall Coccinelle versi baru dari GitHub releases..."
-        COCCI_VERSION="1.3"
-        COCCI_TARBALL="coccinelle-${COCCI_VERSION}-bin-x86_64.tar.gz"
-        COCCI_URL="https://github.com/coccinelle/coccinelle/releases/download/${COCCI_VERSION}/${COCCI_TARBALL}"
-
-        cd /tmp
-        if wget -q "$COCCI_URL" -O "$COCCI_TARBALL"; then
-          tar -xzf "$COCCI_TARBALL"
-          COCCI_DIR=$(find /tmp -maxdepth 1 -type d -name "coccinelle-*" | head -1)
-          if [ -n "$COCCI_DIR" ]; then
-            sudo cp -a "$COCCI_DIR" /opt/coccinelle
-            sudo ln -sf /opt/coccinelle/bin/spatch /usr/local/bin/spatch
-            echo "[+] Coccinelle terinstall:"
-            spatch --version 2>&1 | head -3 || true
-          else
-            echo "[!] Fallback ke apt coccinelle..."
-            sudo apt-get install -y -qq coccinelle
-          fi
-        else
-          echo "[!] Gagal download, fallback ke apt coccinelle..."
-          sudo apt-get install -y -qq coccinelle
-        fi
+        TMP_REKERNEL=/tmp/rekernel-src
+        rm -rf "$TMP_REKERNEL"
+        git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL"
 
         echo "==============================================="
-        echo "[*] Mengunduh source dan patch Re:Kernel..."
+        echo "[*] Menyalin LKM-Source ke drivers/rekernel..."
         echo "==============================================="
-        TEMP_DIR="/tmp/rekernel-patch"
-        rm -rf "$TEMP_DIR"
-        mkdir -p "$TEMP_DIR/cocci"
-
-        REPO_BASE="https://github.com/dabao1955/kernel_build_action/raw/main/rekernel"
-        PATCHES_BASE="https://raw.githubusercontent.com/dabao1955/kernel_build_action/main/rekernel/patches"
-
-        aria2c -d "$TEMP_DIR" -o src.zip "$REPO_BASE/src.zip"
-        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/proc_ops.cocci"
-        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/binder.cocci"
-        aria2c -d "$TEMP_DIR/cocci" "$PATCHES_BASE/signal.cocci"
-
-        echo "[*] Mengekstrak source..."
-        unzip -o "$TEMP_DIR/src.zip" -d "$TEMP_DIR"
-
         REKERNEL_DST="$KERNEL_SRC/drivers/rekernel"
         rm -rf "$REKERNEL_DST"
-        cp -r "$TEMP_DIR/rekernel" "$REKERNEL_DST"
-        echo "[+] Re:Kernel source disalin ke $REKERNEL_DST"
+        mkdir -p "$REKERNEL_DST"
+        cp -a "$TMP_REKERNEL/LKM-Source/." "$REKERNEL_DST/"
 
-        echo "[*] Menerapkan patch Coccinelle..."
+        echo "[*] Isi drivers/rekernel:"
+        ls -la "$REKERNEL_DST" || true
 
-        SPATCH_OK=0
-        if command -v spatch >/dev/null 2>&1; then
-          echo "[*] spatch ditemukan: $(spatch --version 2>&1 | head -1)"
-          SPATCH_OK=1
-        fi
-
-        if [ "$SPATCH_OK" -eq 1 ]; then
-          # Patch 1: proc_ops (hanya jika kernel pakai struct proc_ops)
-          if grep -q "struct proc_ops" "$KERNEL_SRC/include/linux/proc_fs.h" 2>/dev/null; then
-            echo "[*] Menerapkan proc_ops.cocci ke rekernel.c..."
-            if spatch --in-place --sp-file "$TEMP_DIR/cocci/proc_ops.cocci" "$REKERNEL_DST/rekernel.c" 2>&1; then
-              echo "[+] proc_ops patch OK"
-            else
-              echo "[!] proc_ops patch gagal"
-            fi
-          else
-            echo "[*] Kernel tidak pakai struct proc_ops, skip proc_ops patch"
-          fi
-
-          # Patch 2: binder.cocci
-          if [ -f "$KERNEL_SRC/drivers/android/binder.c" ]; then
-            echo "[*] Menerapkan binder.cocci ke binder.c..."
-            if spatch --in-place --sp-file "$TEMP_DIR/cocci/binder.cocci" "$KERNEL_SRC/drivers/android/binder.c" 2>&1; then
-              echo "[+] binder patch OK"
-            else
-              echo "[!] binder patch gagal — coba dengan --no-includes"
-              spatch --no-includes --in-place --sp-file "$TEMP_DIR/cocci/binder.cocci" "$KERNEL_SRC/drivers/android/binder.c" 2>&1 || true
-            fi
-          else
-            echo "[!] binder.c tidak ditemukan"
-          fi
-
-          # Patch 3: signal.cocci
-          if [ -f "$KERNEL_SRC/kernel/signal.c" ]; then
-            echo "[*] Menerapkan signal.cocci ke signal.c..."
-            if spatch --in-place --sp-file "$TEMP_DIR/cocci/signal.cocci" "$KERNEL_SRC/kernel/signal.c" 2>&1; then
-              echo "[+] signal patch OK"
-            else
-              echo "[!] signal patch gagal — coba dengan --no-includes"
-              spatch --no-includes --in-place --sp-file "$TEMP_DIR/cocci/signal.cocci" "$KERNEL_SRC/kernel/signal.c" 2>&1 || true
-            fi
-          else
-            echo "[!] signal.c tidak ditemukan"
-          fi
+        echo "==============================================="
+        echo "[*] Mengadaptasi Makefile dan Kconfig..."
+        echo "==============================================="
+        REKERNEL_MAKEFILE="$REKERNEL_DST/Makefile"
+        if [ -f "$REKERNEL_MAKEFILE" ]; then
+          # Ubah dari modul eksternal (obj-m) menjadi in-tree (obj-y)
+          sed -i 's/^obj-m := rekernel\.o$/obj-$(CONFIG_REKERNEL) += rekernel.o/' "$REKERNEL_MAKEFILE"
+          # Tambah legacy netlink flag
+          grep -qF 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' "$REKERNEL_MAKEFILE" || \
+            echo 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' >> "$REKERNEL_MAKEFILE"
+          echo "[+] Makefile diadaptasi"
         else
-          echo "[!] spatch tidak tersedia, skip semua patch Coccinelle"
+          echo "[!] Makefile tidak ditemukan di $REKERNEL_DST"
         fi
 
-        echo "[*] Menambahkan konfigurasi ke defconfig dan fragment..."
-        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+        # Hapus 'depends on MODULES' dari Kconfig agar bisa built-in
+        if [ -f "$REKERNEL_DST/Kconfig" ]; then
+          sed -i '/^[[:space:]]*depends on MODULES[[:space:]]*$/d' "$REKERNEL_DST/Kconfig"
+          echo "[+] Kconfig diadaptasi"
+        fi
+
+        echo "==============================================="
+        echo "[*] Menghubungkan ke drivers/Kconfig dan drivers/Makefile..."
+        echo "==============================================="
+        if [ -f "$KERNEL_SRC/drivers/Kconfig" ]; then
+          if ! grep -qF 'source "drivers/rekernel/Kconfig"' "$KERNEL_SRC/drivers/Kconfig"; then
+            sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' "$KERNEL_SRC/drivers/Kconfig"
+            echo "[+] drivers/Kconfig diperbarui"
+          fi
+        fi
+
+        if [ -f "$KERNEL_SRC/drivers/Makefile" ]; then
+          if ! grep -qF 'obj-$(CONFIG_REKERNEL) += rekernel/' "$KERNEL_SRC/drivers/Makefile"; then
+            echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> "$KERNEL_SRC/drivers/Makefile"
+            echo "[+] drivers/Makefile diperbarui"
+          fi
+        fi
+
+        echo "==============================================="
+        echo "[*] Memperbaiki include paths untuk in-tree build..."
+        echo "==============================================="
+        # Fix relative include untuk binder_internal.h
+        for f in "$REKERNEL_DST"/*.c; do
+          [ -f "$f" ] || continue
+          sed -i 's|#include <../android/binder_internal.h>|#include "../android/binder_internal.h"|g' "$f" 2>/dev/null || true
+        done
+
+        # Tambah seq_file.h jika belum ada (dibutuhkan DEFINE_SHOW_ATTRIBUTE)
+        for f in "$REKERNEL_DST"/*.c; do
+          [ -f "$f" ] || continue
+          if ! grep -qF '#include <linux/seq_file.h>' "$f"; then
+            if grep -qF '#include <linux/kprobes.h>' "$f"; then
+              sed -i '/#include <linux\/kprobes.h>/a #include <linux/seq_file.h>' "$f"
+            fi
+          fi
+        done
+        echo "[+] Include paths diperbaiki"
+
+        echo "==============================================="
+        echo "[*] Menambahkan config ke wild_gki.fragment..."
+        echo "==============================================="
         {
           echo ""
           echo "# === Re:Kernel configs ==="
           echo "CONFIG_REKERNEL=y"
-          echo "CONFIG_REKERNEL_NETWORK=n"
+          echo "CONFIG_REKERNEL_NETWORK=y"
           echo "# === End Re:Kernel configs ==="
         } >> "$FRAGMENT"
 
-        KCONFIG="$KERNEL_SRC/drivers/Kconfig"
-        if ! grep -q 'source "drivers/rekernel/Kconfig"' "$KCONFIG" 2>/dev/null; then
-          awk '/^endmenu$/{last=NR} {lines[NR]=$0} END{for(i=1;i<=NR;i++){if(i==last) print "source \"drivers/rekernel/Kconfig\""; print lines[i]}}' "$KCONFIG" > "$KCONFIG.tmp" && mv "$KCONFIG.tmp" "$KCONFIG"
-          echo "[+] drivers/Kconfig diperbarui"
-        fi
-
-        MAKEFILE="$KERNEL_SRC/drivers/Makefile"
-        if ! grep -q "obj-\$(CONFIG_REKERNEL) += rekernel/" "$MAKEFILE" 2>/dev/null; then
-          echo "" >> "$MAKEFILE"
-          echo "obj-\$(CONFIG_REKERNEL) += rekernel/" >> "$MAKEFILE"
-          echo "[+] drivers/Makefile diperbarui"
-        fi
-
         echo "[+] Re:Kernel berhasil diintegrasikan."
+    # =========================================================================
+    # End Re:Kernel
+    # =========================================================================
 
     # =========================================================================
     # Kali NetHunter — Core Patches

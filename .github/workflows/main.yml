@@ -127,6 +127,10 @@ on:
         description: "Re:Kernel (tombstone kernel support)"
         type: boolean
         default: false
+      use_ssg:
+        description: "SSG I/O Scheduler (SamSung Generic)"
+        type: boolean
+        default: false
       test_release_notes:
         description: "Render release notes preview only (skip all builds + release)"
         type: boolean
@@ -215,11 +219,11 @@ jobs:
             return 1
           }
 
-          resolve_sha() { # repo ref
+          resolve_sha() {
             retry git ls-remote "$1" "$2" | awk '{print $1; exit}'
           }
 
-          emit() { # key value
+          emit() {
             if [ -z "$2" ] || ! [[ "$2" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Failed to resolve $1 (got: ${2:-empty})" >&2
               exit 1
@@ -293,7 +297,7 @@ jobs:
             NEXT_COMMIT="$(resolve_sha https://github.com/KernelSU-Next/KernelSU-Next.git refs/heads/dev)"
           fi
 
-          mk_entry() { # flavor variant commit
+          mk_entry() {
             printf '{"root_flavor":"%s","variant":"%s","root_commit":"%s"}' "$1" "$2" "$3"
           }
 
@@ -374,7 +378,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          resolve_one() { # flavor
+          resolve_one() {
             local flavor="$1"
             local owner repo wf stock
             case "$flavor" in
@@ -517,6 +521,7 @@ jobs:
           [ "${{ inputs.use_bpf }}" = "true" ] && FEATURES="${FEATURES}BPF+"
           [ "${{ inputs.use_perf }}" = "true" ] && FEATURES="${FEATURES}Perf+"
           [ "${{ inputs.use_rekernel }}" = "true" ] && FEATURES="${FEATURES}ReKernel+"
+          [ "${{ inputs.use_ssg }}" = "true" ] && FEATURES="${FEATURES}SSG+"
           echo "feature_set=${FEATURES%+}" >> "$GITHUB_OUTPUT"
 
       - name: Clone shared source repos once
@@ -1487,6 +1492,7 @@ jobs:
           USE_BPF: ${{ inputs.use_bpf }}
           USE_PERF: ${{ inputs.use_perf }}
           USE_REKERNEL: ${{ inputs.use_rekernel }}
+          USE_SSG: ${{ inputs.use_ssg }}
           USE_CACHE: ${{ inputs.use_cache }}
           PAGE_SIZE: ${{ inputs.page_size }}
           KERNEL_BUILD_VERSION: ${{ inputs.kernel_build_version }}
@@ -1542,6 +1548,7 @@ jobs:
           if env("USE_BPF","true")=="true": feats.append("BTF / eBPF / FUSE-BPF")
           if env("USE_PERF","false")=="true": feats.append("Performance Tuning")
           if env("USE_REKERNEL","false")=="true": feats.append("Re:Kernel (tombstone)")
+          if env("USE_SSG","false")=="true": feats.append("SSG I/O Scheduler")
           if env("PAGE_SIZE","4k")=="16k": feats.append("16 KB page size (ARM64)")
           lines=[]
           lines.append("# Wild Kernels for GKI2 Devices")

@@ -86,7 +86,7 @@ jobs:
   build-gki:
     name: "${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }} (${{ inputs.variant }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     concurrency:
       group: build-${{ inputs.root_flavor }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}${{ inputs.page_size }}
       cancel-in-progress: false
@@ -879,230 +879,6 @@ jobs:
         version: ${{ inputs.version }}
         page_size: ${{ inputs.page_size }}
 
-    # =========================================================================
-    # Kali NetHunter — Compile RTL8812AU (with Module.symvers fallback)
-    # =========================================================================
-    - name: Compile RTL8812AU Driver (Kleaf Output with Fallback)
-      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        WORKSPACE="${{ github.workspace }}"
-        KERNEL_SRC="$WORKSPACE/kernel/common"
-        OUT_DIR="$WORKSPACE/external_modules"
-        mkdir -p "$OUT_DIR"
-
-        # =====================================================================
-        # 0. Install cross-compiler (WAJIB sebelum make)
-        # =====================================================================
-        echo "==============================================="
-        echo "[*] Menginstall cross-compiler aarch64..."
-        echo "==============================================="
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-        echo "[+] Cross-compiler terinstall:"
-        aarch64-linux-gnu-gcc --version | head -1
-
-        echo "==============================================="
-        echo "[*] Mencari Module.symvers dari output Kleaf..."
-        echo "==============================================="
-
-        MODULE_SYMVERS=""
-
-        # --- 1. Cek lokasi standar ---
-        for candidate in \
-          "/home/runner/out/dist/Module.symvers" \
-          "/home/runner/out/Module.symvers" \
-          "$KERNEL_SRC/Module.symvers" \
-          "$WORKSPACE/out/Module.symvers" \
-          "$WORKSPACE/out/dist/Module.symvers"; do
-          if [ -f "$candidate" ]; then
-            MODULE_SYMVERS="$candidate"
-            echo "[+] Ditemukan di lokasi standar: $candidate"
-            break
-          fi
-        done
-
-        # --- 2. Cari di seluruh /home/runner/out dan workspace ---
-        if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[*] Mencari di seluruh /home/runner/out dan workspace..."
-          MODULE_SYMVERS=$(find /home/runner/out "$WORKSPACE/out" -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
-          [ -n "$MODULE_SYMVERS" ] && echo "[+] Ditemukan: $MODULE_SYMVERS"
-        fi
-
-        # --- 3. Cari di dalam arsip Kleaf filegroup (nama spesifik) ---
-        if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[*] Mencari arsip kernel_aarch64_filegroup_decl.tar.gz..."
-          KLEAF_ARCHIVE=$(find /home/runner/out "$WORKSPACE/out" \
-            -name "kernel_aarch64_filegroup_decl.tar.gz" -type f 2>/dev/null | head -1 || true)
-
-          # Fallback: wildcard lebih luas
-          if [ -z "$KLEAF_ARCHIVE" ]; then
-            KLEAF_ARCHIVE=$(find /home/runner/out "$WORKSPACE/out" \
-              -name "*filegroup*.tar.gz" -type f 2>/dev/null | head -1 || true)
-          fi
-
-          if [ -n "$KLEAF_ARCHIVE" ]; then
-            echo "[*] Menemukan arsip: $KLEAF_ARCHIVE"
-            mkdir -p /tmp/kleaf-extract
-            tar -xzf "$KLEAF_ARCHIVE" -C /tmp/kleaf-extract/ 2>/dev/null || true
-            MODULE_SYMVERS=$(find /tmp/kleaf-extract -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
-            if [ -n "$MODULE_SYMVERS" ]; then
-              echo "[+] Ditemukan di dalam arsip: $MODULE_SYMVERS"
-            fi
-          fi
-        fi
-
-        # --- 4. FALLBACK: Generate sendiri dengan gki_defconfig + modules_prepare ---
-        if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[!] Module.symvers TIDAK ditemukan. Mencoba generate sendiri..."
-          echo "[*] Isi /home/runner/out saat ini:"
-          ls -la /home/runner/out/ 2>/dev/null || true
-
-          cd "$KERNEL_SRC"
-
-          # 4a. Cari gki_defconfig
-          GKI_DEFCONFIG=""
-          for cfg in \
-            "arch/arm64/configs/gki_defconfig" \
-            "arch/arm64/configs/gki_aarch64_defconfig" \
-            "arch/arm64/configs/defconfig"; do
-            if [ -f "$cfg" ]; then
-              GKI_DEFCONFIG="$cfg"
-              break
-            fi
-          done
-
-          if [ -n "$GKI_DEFCONFIG" ]; then
-            echo "[*] Menggunakan defconfig: $GKI_DEFCONFIG"
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- "$(basename "$GKI_DEFCONFIG")" || true
-          else
-            echo "[!] Tidak menemukan gki_defconfig. Mencoba 'defconfig' generik..."
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig || true
-          fi
-
-          # 4b. Pastikan CONFIG_MODVERSIONS=y (wajib untuk Module.symvers)
-          if [ -f ".config" ]; then
-            echo "[*] Memastikan CONFIG_MODVERSIONS=y..."
-            if ! grep -q "^CONFIG_MODVERSIONS=y" .config; then
-              echo "CONFIG_MODVERSIONS=y" >> .config
-            fi
-          fi
-
-          echo "[*] Menjalankan 'make prepare'..."
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare -j"$(nproc)" || true
-
-          echo "[*] Menjalankan 'make modules_prepare'..."
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j"$(nproc)" || true
-
-          MODULE_SYMVERS=$(find "$KERNEL_SRC" -name "Module.symvers" -type f 2>/dev/null | head -1 || true)
-          if [ -n "$MODULE_SYMVERS" ]; then
-            echo "[+] Module.symvers berhasil digenerate: $MODULE_SYMVERS"
-          fi
-        fi
-
-        if [ -z "$MODULE_SYMVERS" ]; then
-          echo "[!] Module.symvers TIDAK BISA ditemukan/digenerate. Skip kompilasi driver."
-          echo "[*] Tree kernel source (10 baris pertama):"
-          ls -la "$KERNEL_SRC/" 2>/dev/null | head -10 || true
-          exit 0
-        fi
-
-        echo "[*] Menggunakan Module.symvers: $MODULE_SYMVERS"
-
-        # Cek kernel.release
-        KERNEL_RELEASE_FILE=$(find "$KERNEL_SRC" -name "kernel.release" -type f 2>/dev/null | head -1 || true)
-        if [ -n "$KERNEL_RELEASE_FILE" ]; then
-          echo "[*] Kernel release: $(cat "$KERNEL_RELEASE_FILE")"
-        fi
-
-        echo "==============================================="
-        echo "[*] Mengkloning driver RTL8812AU..."
-        echo "==============================================="
-
-        DRIVER_DIR="/tmp/driver-rtl8812au"
-        rm -rf "$DRIVER_DIR"
-        git clone --depth=1 https://github.com/aircrack-ng/rtl8812au.git "$DRIVER_DIR"
-        cd "$DRIVER_DIR"
-
-        # Patch kompatibilitas kernel 6.1
-        echo "[*] Menerapkan patch kompatibilitas kernel 6.1..."
-        if grep -rn "complete_and_exit" . --include="*.c" --include="*.h" 2>/dev/null | grep -v kthread_complete_and_exit; then
-          find . -type f \( -name "*.c" -o -name "*.h" \) -exec \
-            sed -i 's/\bcomplete_and_exit\b/kthread_complete_and_exit/g' {} \;
-          echo "[+] Patch complete_and_exit diterapkan."
-        else
-          echo "[*] Tidak ada complete_and_exit, skip patch."
-        fi
-
-        echo "==============================================="
-        echo "[*] Mengompilasi driver RTL8812AU..."
-        echo "==============================================="
-
-        export ARCH=arm64
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        export KBUILD_BUILD_USER=build-user
-        export KBUILD_BUILD_HOST=build-host
-
-        COMPILE_OK=0
-        BUILD_LOG="/tmp/rtl8812au-build.log"
-        : > "$BUILD_LOG"
-
-        # Percobaan 1: KSRC
-        echo "[*] Percobaan 1: KSRC=..."
-        if make -j"$(nproc)" \
-            KSRC="$KERNEL_SRC" \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
-            2>&1 | tee -a "$BUILD_LOG"; then
-          COMPILE_OK=1
-        fi
-
-        # Percobaan 2: KERNELDIR
-        if [ "$COMPILE_OK" -eq 0 ]; then
-          echo "[*] Percobaan 2: KERNELDIR=..."
-          if make -j"$(nproc)" \
-              KERNELDIR="$KERNEL_SRC" \
-              ARCH="$ARCH" \
-              CROSS_COMPILE="$CROSS_COMPILE" \
-              KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
-              2>&1 | tee -a "$BUILD_LOG"; then
-            COMPILE_OK=1
-          fi
-        fi
-
-        # Percobaan 3: -C langsung
-        if [ "$COMPILE_OK" -eq 0 ]; then
-          echo "[*] Percobaan 3: -C ..."
-          if make -j"$(nproc)" \
-              -C "$KERNEL_SRC" \
-              M="$DRIVER_DIR" \
-              ARCH="$ARCH" \
-              CROSS_COMPILE="$CROSS_COMPILE" \
-              KBUILD_EXTRA_SYMBOLS="$MODULE_SYMVERS" \
-              2>&1 | tee -a "$BUILD_LOG"; then
-            COMPILE_OK=1
-          fi
-        fi
-
-        echo "==============================================="
-        if [ "$COMPILE_OK" -eq 1 ]; then
-          echo "[+] Driver RTL8812AU BERHASIL dikompilasi!"
-          find "$DRIVER_DIR" -name "*.ko" -exec cp {} "$OUT_DIR/" \;
-          echo "[*] Modul yang dihasilkan:"
-          ls -la "$OUT_DIR/"
-        else
-          echo "[!] Driver RTL8812AU GAGAL dikompilasi."
-          echo "[*] 60 baris terakhir dari log:"
-          tail -60 "$BUILD_LOG" || true
-          echo "==============================================="
-          echo "[*] Error spesifik:"
-          grep -iE "error:|undefined|No such file|fatal" "$BUILD_LOG" | head -20 || true
-        fi
-        echo "==============================================="
-
     - name: Get Cache Stats
       uses: ./.github/actions/cache-stats
       with:
@@ -1140,108 +916,6 @@ jobs:
         cache_bucket: "bazel-cache-${{ inputs.version }}-${{ inputs.variant }}${{ inputs.page_size == '16k' && '-16k' || '' }}"
         compression_level: 9
         github_token: ${{ github.token }}
-
-    # =========================================================================
-    # Integrate RTL8812AU into AnyKernel3
-    # =========================================================================
-    - name: Integrate RTL8812AU into AnyKernel3
-      if: success() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        ANYDIR="${{ github.workspace }}/AnyKernel3"
-        MODDIR="${{ github.workspace }}/external_modules"
-
-        if [ ! -d "$ANYDIR" ]; then
-          echo "[!] AnyKernel3 tidak ditemukan di $ANYDIR. Skip."
-          exit 0
-        fi
-
-        if [ ! -d "$MODDIR" ] || [ -z "$(ls -A "$MODDIR" 2>/dev/null)" ]; then
-          echo "[*] Tidak ada modul .ko untuk diintegrasikan. Skip."
-          exit 0
-        fi
-
-        echo "==============================================="
-        echo "[*] Mengintegrasikan modul ke AnyKernel3..."
-        echo "==============================================="
-
-        KO_FILES=$(find "$MODDIR" -name "*.ko" 2>/dev/null || true)
-        if [ -z "$KO_FILES" ]; then
-          echo "[*] Tidak ada .ko ditemukan di $MODDIR. Skip."
-          exit 0
-        fi
-
-        mkdir -p "$ANYDIR/modules"
-        cp $KO_FILES "$ANYDIR/modules/"
-        echo "[+] Modul disalin:"
-        ls -la "$ANYDIR/modules/"
-
-        # Buat post-flash.sh untuk insmod otomatis
-        if [ -f "$ANYDIR/post-flash.sh" ]; then
-          echo "[*] post-flash.sh sudah ada, menambahkan insmod..."
-          cat >> "$ANYDIR/post-flash.sh" << 'EOF'
-
-        # === NetHunter RTL8812AU auto-insmod ===
-        if [ -d "/data/adb/modules" ]; then
-          for ko in /data/adb/modules/*/system/lib/modules/*.ko; do
-            [ -f "$ko" ] && insmod "$ko" 2>/dev/null || true
-          done
-        fi
-        # === End NetHunter ===
-        EOF
-        else
-          echo "[*] Membuat post-flash.sh..."
-          cat > "$ANYDIR/post-flash.sh" << 'EOF'
-        #!/sbin/sh
-        # Post-flash script untuk Kali NetHunter RTL8812AU
-
-        if [ -d "/data/adb" ]; then
-          MODDIR="/data/adb/modules/nethunter_wifi"
-          mkdir -p "$MODDIR/system/lib/modules"
-          if [ -d "/modules" ]; then
-            cp /modules/*.ko "$MODDIR/system/lib/modules/" 2>/dev/null || true
-          fi
-          cat > "$MODDIR/module.prop" << 'PROP'
-        id=nethunter_wifi
-        name=NetHunter WiFi Drivers
-        version=1.0
-        versionCode=1
-        author=Kali NetHunter
-        description=External WiFi driver for RTL8812AU
-        PROP
-        fi
-
-        for ko in /modules/*.ko; do
-          [ -f "$ko" ] && insmod "$ko" 2>/dev/null || true
-        done
-        EOF
-          chmod +x "$ANYDIR/post-flash.sh"
-          echo "[+] post-flash.sh dibuat."
-        fi
-
-        # Update anykernel.sh untuk memanggil post-flash.sh
-        if [ -f "$ANYDIR/anykernel.sh" ]; then
-          if ! grep -q "post-flash.sh" "$ANYDIR/anykernel.sh"; then
-            echo "[*] Menambahkan referensi post-flash.sh..."
-            sed -i '/^exit 0/i # NetHunter post-flash\nif [ -f "$AKHOME/post-flash.sh" ]; then\n  sh "$AKHOME/post-flash.sh"\nfi\n' "$ANYDIR/anykernel.sh" || true
-          fi
-        fi
-
-        echo "==============================================="
-        echo "[*] Integrasi AnyKernel3 selesai."
-        find "$ANYDIR" -maxdepth 2 -type f | head -20
-        echo "==============================================="
-
-    - name: Upload RTL8812AU Module
-      if: always() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
-      uses: actions/upload-artifact@v7
-      with:
-        name: ${{ steps.extract.outputs.file_name }}-RTL8812AU-Module
-        path: ${{ github.workspace }}/external_modules/
-        if-no-files-found: ignore
-        compression-level: 9
 
     - name: Consolidated Build Summary
       if: always()
@@ -1297,14 +971,6 @@ jobs:
           SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
         fi
 
-        RTL8812AU_STATUS="tidak dikompilasi"
-        if [ -d "${{ github.workspace }}/external_modules" ]; then
-          KO_COUNT=$(find "${{ github.workspace }}/external_modules" -name "*.ko" 2>/dev/null | wc -l)
-          if [ "$KO_COUNT" -gt 0 ]; then
-            RTL8812AU_STATUS="$KO_COUNT modul .ko"
-          fi
-        fi
-
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
           echo
@@ -1321,7 +987,6 @@ jobs:
           echo "| **SUSFS Version** | ${SUSFS_VER} |"
           echo "| **SUSFS Commit** | ${SUSFS_SHA} |"
           echo "| **NoMount Commit** | ${NOMOUNT_SHA} |"
-          echo "| **RTL8812AU** | ${RTL8812AU_STATUS} |"
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
@@ -1351,10 +1016,10 @@ jobs:
         fi
 
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build + root + SUSFS + NoMount + Kali NetHunter + RTL8812AU"
+          METHOD="GKI source build + root + SUSFS + NoMount + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build + root + SUSFS + Kali NetHunter + RTL8812AU"
+          METHOD="GKI source build + root + SUSFS + Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 

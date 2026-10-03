@@ -88,10 +88,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      # Must include every input that varies across matrix legs. Without
-      # sublevel/variant/page_size, several distinct builds collide on one key
-      # and, with cancel-in-progress: false, queue behind each other instead of
-      # running in parallel — one kernel compiles at a time.
       group: build-${{ inputs.root_flavor }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}${{ inputs.page_size }}
       cancel-in-progress: false
     steps:
@@ -108,13 +104,10 @@ jobs:
           16k) ;;
           *) echo "ERROR: unsupported page_size '$PAGE_SIZE' (expected 4k or 16k)." >&2; exit 1 ;;
         esac
-        # Kleaf exposes --page_size only on the build branches used by these
-        # GKI families (main-kernel-build-2023/2024, main-kernel-2025).
         case "${{ inputs.version }}" in
           android14-6.1|android15-6.6|android16-6.12) ;;
           *)
             echo "ERROR: page_size=16k is not supported for ${{ inputs.version }}." >&2
-            echo "Supported families: android14-6.1, android15-6.6, android16-6.12." >&2
             exit 1
             ;;
         esac
@@ -125,7 +118,7 @@ jobs:
 
     - name: Free Disk Space
       if: true
-      uses: endersonmenezes/free-disk-space@v4  # Use @main for latest, @v3 for stable
+      uses: endersonmenezes/free-disk-space@v4
       with:
         remove_android: true
         remove_dotnet: true
@@ -135,8 +128,8 @@ jobs:
         remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
         remove_packages_one_command: true
         remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
-        rm_cmd: "rmz"  # Use 'rmz' for faster deletion (default: 'rm')
-        rmz_version: "3.2.0"  # Required when rm_cmd is 'rmz'
+        rm_cmd: "rmz"
+        rmz_version: "3.2.0"
         testing: false
 
     - name: Setup more Swap (for LTO)
@@ -164,8 +157,6 @@ jobs:
       shell: bash
       run: |
         set -x
-        # Hardcode the build timestamp to the 5th day of the patch level
-        # at 04:20 UTC, using the existing timestamp formats expected by the build.
         OS_PATCH_LEVEL_INPUT="${{ inputs.os_patch_level }}"
         if [[ "$OS_PATCH_LEVEL_INPUT" == lts* ]]; then
           if [[ "$OS_PATCH_LEVEL_INPUT" =~ ^lts-([0-9]{2})$ ]]; then
@@ -181,11 +172,9 @@ jobs:
         echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> $GITHUB_ENV
         KBUILD_TS=$(date -u -d @${SOURCE_DATE_EPOCH} '+%a %b %d %H:%M:%S UTC %Y')
         echo "KBUILD_BUILD_TIMESTAMP=${KBUILD_TS}" >> $GITHUB_ENV
-        # Keep git metadata aligned with the same fixed timestamp.
         GIT_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')
         echo "GIT_COMMITTER_DATE=${GIT_DATE}" >> $GITHUB_ENV
         echo "GIT_AUTHOR_DATE=${GIT_DATE}" >> $GITHUB_ENV
-        echo "Build timestamp set to: $(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%d %H:%M:%S UTC') (epoch: $SOURCE_DATE_EPOCH)"
 
     - name: Extract Sublevel and Set File Name
       id: extract
@@ -269,10 +258,6 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        # KernelSU-Next (next) always uses the latest susfs4ksu gki branch tip so
-        # SUSFS stays API-matched to the always-latest KernelSU-Next tree. All
-        # other roots (kernelsu, resukisu, sukisu-ultra) use the pinned
-        # verified SUSFS commit.
         if [ "${{ inputs.root_flavor }}" = "next" ]; then
           BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           SUSFS_COMMIT="$(git ls-remote https://gitlab.com/simonpunk/susfs4ksu.git "refs/heads/${BRANCH}" | cut -f1)"
@@ -303,42 +288,21 @@ jobs:
         if [ "$(printf '%s\n' "6.6" "$KVER" | sort -V | head -n1)" = "6.6" ]; then
           echo "[*] KVER $KVER >= 6.6, patching selinux_hide.c (all flavors/branches)"
           for f in $(find "${{ github.workspace }}" -name selinux_hide.c 2>/dev/null); do
-            # After SUSFS 10_enable (kernelsu only) the declaration becomes
-            #   extern void security_dump_masked_av_fn(...)   (a function)
-            #   if (func) / if (func != NULL) both trigger -Werror:
-            #     -Wpointer-bool-conversion  vs  -Wtautological-pointer-compare
-            # For the function form,  &func != NULL  silences both (clang note).
-            # For the pointer form (resukisu/next/sukisu-ultra, no 10_enable) we want ptr != NULL.
             if grep -q "extern void security_dump_masked_av_fn" "$f"; then
-              echo "[*] $f is extern-function form (10_enable applied), patching with &"
               sed -i 's/if (security_dump_masked_av_fn)/if (\&security_dump_masked_av_fn)/g' "$f"
               sed -i 's/if (security_dump_masked_av_fn != NULL)/if (\&security_dump_masked_av_fn != NULL)/g' "$f"
               sed -i 's/if (context_struct_compute_av_fn)/if (\&context_struct_compute_av_fn)/g' "$f"
               sed -i 's/if (context_struct_compute_av_fn != NULL)/if (\&context_struct_compute_av_fn != NULL)/g' "$f"
-              echo "[+] Patched $f (function form)"
             elif grep -q "if (security_dump_masked_av_fn" "$f"; then
-              echo "[*] $f is pointer form, patching with != NULL"
               sed -i 's/if (security_dump_masked_av_fn)/if (security_dump_masked_av_fn != NULL)/g' "$f"
               sed -i 's/if (context_struct_compute_av_fn)/if (context_struct_compute_av_fn != NULL)/g' "$f"
-              echo "[+] Patched $f (pointer form)"
-            else
-              echo "[*] $f already patched"
             fi
-            # Next (and tiann without 10_enable fallback) declares the 3 helpers as
-            # static on 6.6, but kernel hooks.c/selinuxfs.c reference them as extern
-            # after SUSFS (ReSukiSU uses __maybe_static -> global). Strip static so
-            # the linker can resolve security_context_to_sid_with_policy etc.
             if grep -q "^static int security_context_to_sid_with_policy" "$f"; then
-              echo "[*] Stripping static from $f helpers (Next 6.6)"
               sed -i 's/^static int security_context_to_sid_with_policy/int security_context_to_sid_with_policy/g' "$f"
               sed -i 's/^static int security_sid_to_context_with_policy/int security_sid_to_context_with_policy/g' "$f"
               sed -i 's/^static void security_compute_av_user_with_policy/void security_compute_av_user_with_policy/g' "$f"
-              # also forward decls (same prefix, same sed covers them)
-              echo "[+] Stripped static from $f"
             fi
           done
-        else
-          echo "[-] KVER $KVER < 6.6"
         fi
 
     - name: Baseband Guard
@@ -413,9 +377,7 @@ jobs:
         kernel_version: ${{ inputs.kernel_version }}
 
     # =========================================================================
-    # Kali NetHunter Kernel Patches
-    # Diterapkan setelah SUSFS/NoMount/Networking, sebelum branding & build.
-    # Diaktifkan bersama feature_set 'NET' atau 'All'.
+    # Kali NetHunter — Core Patches
     # =========================================================================
     - name: Apply Kali NetHunter Kernel Patches
       if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
@@ -426,7 +388,6 @@ jobs:
         KVER="${{ inputs.kernel_version }}"
         WORKSPACE="${{ github.workspace }}"
 
-        # Deteksi direktori source kernel (GKI memakai common/, legacy tidak)
         if [ -d "$WORKSPACE/kernel/common" ]; then
           KERNEL_SRC="$WORKSPACE/kernel/common"
         elif [ -d "$WORKSPACE/kernel" ]; then
@@ -437,14 +398,12 @@ jobs:
         fi
         echo "[*] KERNEL_SRC = $KERNEL_SRC"
 
-        # 1) Kloning repo patch NetHunter
         NH_REPO="/tmp/nethunter-patches"
         rm -rf "$NH_REPO"
         git clone --depth=1 \
           https://github.com/wumingzhinu/kali-nethunter-kernel-patches.git \
           "$NH_REPO"
 
-        # 2) Pilih direktori patch sesuai versi kernel
         case "$KVER" in
           4.4|4.9|4.14|4.19|5.4)
             PATCH_DIR="patches/${KVER}"
@@ -461,16 +420,13 @@ jobs:
         PATCH_PATH="$NH_REPO/$PATCH_DIR"
         if [ ! -d "$PATCH_PATH" ]; then
           echo "[-] Direktori $PATCH_PATH tidak ada. Skip."
-          echo "[*] Isi $NH_REPO:"
           ls -la "$NH_REPO" || true
           exit 0
         fi
 
         echo "[*] Menggunakan patch dari: $PATCH_DIR"
-        echo "[*] Isi direktori patch:"
         ls -la "$PATCH_PATH" || true
 
-        # 3) Terapkan setiap .patch (path ABSOLUT supaya git apply bisa membukanya)
         mkdir -p "$WORKSPACE/patch-rejects"
         FAILED=0
         APPLIED=0
@@ -478,7 +434,7 @@ jobs:
           [ -e "$patch" ] || continue
           echo "==============================================="
           echo "[*] Applying: $(basename "$patch")"
-          if git -C "$KERNEL_SRC" apply --3way --whitespace=nowarn "$patch"; then
+          if git -C "$KERNEL_SRC" apply --whitespace=nowarn "$patch"; then
             echo "[+] OK"
             APPLIED=$((APPLIED + 1))
           else
@@ -491,36 +447,378 @@ jobs:
 
         echo "==============================================="
         echo "[*] Ringkasan: $APPLIED patch berhasil, $FAILED patch gagal."
-        if [ "$FAILED" -gt 0 ]; then
-          echo "[!] Ada patch NetHunter yang konflik. Cek artifact 'Rejects'."
-        fi
 
-        # 4) Sisipkan config NetHunter ke fragment build
         NH_CONFIG="$NH_REPO/config/GKI-nethunter.config"
         FRAGMENT="$WORKSPACE/wild_gki.fragment"
         if [ -f "$NH_CONFIG" ]; then
           echo "[*] Menambahkan config NetHunter ke $FRAGMENT"
           {
             echo ""
-            echo "# === Kali NetHunter configs ==="
+            echo "# === Kali NetHunter configs (upstream) ==="
             cat "$NH_CONFIG"
-            echo "# === End Kali NetHunter configs ==="
+            echo "# === End Kali NetHunter configs (upstream) ==="
           } >> "$FRAGMENT"
-        else
-          echo "[!] GKI-nethunter.config tidak ditemukan, skip config."
         fi
 
         echo "[+] Kali NetHunter patch step selesai."
+
     # =========================================================================
-    # End Kali NetHunter Kernel Patches
+    # Kali NetHunter — Full Feature Configs
+    # (HID, USB Gadget, Bluetooth RFCOMM, SDR, CAN bus, NFC, Netfilter)
+    # =========================================================================
+    - name: Apply NetHunter Full Feature Configs
+      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        FRAGMENT="${{ github.workspace }}/wild_gki.fragment"
+
+        cat >> "$FRAGMENT" << 'NETCONFIG'
+
+        # =====================================================================
+        # Kali NetHunter — Full Feature Configs (auto-generated)
+        # =====================================================================
+
+        # --- Wi-Fi Injection & Monitor Mode ---
+        CONFIG_CFG80211=y
+        CONFIG_MAC80211=y
+        CONFIG_MAC80211_MESH=y
+        CONFIG_WIRELESS=y
+        CONFIG_WLAN=y
+        CONFIG_RFKILL=y
+        CONFIG_RFKILL_INPUT=y
+        CONFIG_CFG80211_WEXT=y
+        CONFIG_CFG80211_INTERNAL_REGDB=y
+
+        # --- USB HID (BadUSB / Keyboard Injection) ---
+        CONFIG_USB_HID=y
+        CONFIG_HID_GENERIC=y
+        CONFIG_HIDRAW=y
+        CONFIG_HID_LOGITECH=y
+        CONFIG_HID_LOGITECH_DJ=y
+        CONFIG_HID_MICROSOFT=y
+        CONFIG_HID_APPLE=y
+        CONFIG_HID_ELECOM=y
+
+        # --- USB Gadget / ConfigFS ---
+        CONFIG_USB_GADGET=y
+        CONFIG_USB_CONFIGFS=y
+        CONFIG_USB_CONFIGFS_F_HID=y
+        CONFIG_USB_CONFIGFS_F_UVC=y
+        CONFIG_USB_CONFIGFS_F_MASS_STORAGE=y
+        CONFIG_USB_CONFIGFS_F_ACM=y
+        CONFIG_USB_CONFIGFS_F_SERIAL=y
+        CONFIG_USB_CONFIGFS_F_RNDIS=y
+        CONFIG_USB_CONFIGFS_F_FS=y
+        CONFIG_USB_CONFIGFS_F_UAC2=y
+        CONFIG_USB_CONFIGFS_F_MIDI=y
+        CONFIG_USB_DWC3=y
+        CONFIG_USB_DWC3_DUAL_ROLE=y
+        CONFIG_USB_DWC2=y
+        CONFIG_USB_DWC3_GADGET=y
+        CONFIG_USB_LIBCOMPOSITE=y
+
+        # --- USB Host (External Wi-Fi, 4G, Bluetooth) ---
+        CONFIG_USB_ACM=y
+        CONFIG_USB_ETH=y
+        CONFIG_USB_NCM=y
+        CONFIG_USB_NET_DRIVERS=y
+        CONFIG_USB_SERIAL=y
+        CONFIG_USB_SERIAL_GENERIC=y
+        CONFIG_USB_SERIAL_PL2303=y
+        CONFIG_USB_SERIAL_CP210X=y
+        CONFIG_USB_SERIAL_FTDI_SIO=y
+        CONFIG_USB_SERIAL_CH341=y
+        CONFIG_USB_SERIAL_OPTION=y
+        CONFIG_USB_SERIAL_QUALCOMM=y
+        CONFIG_USB_PHY=y
+        CONFIG_USB_OTG=y
+        CONFIG_USB_XHCI_PLATFORM=y
+        CONFIG_USB_EHCI_HCD_PLATFORM=y
+        CONFIG_USB_OHCI_HCD_PLATFORM=y
+
+        # --- Bluetooth HID & RFCOMM (BT-Arsenal) ---
+        CONFIG_BT=y
+        CONFIG_BT_HIDP=y
+        CONFIG_BT_HCIUART=y
+        CONFIG_BT_HCIUART_H4=y
+        CONFIG_BT_HCIUART_BCM=y
+        CONFIG_BT_HCIUART_QCA=y
+        CONFIG_BT_HCIBTUSB=y
+        CONFIG_BT_HCIBCM203X=y
+        CONFIG_BT_RFCOMM=y
+        CONFIG_BT_RFCOMM_TTY=y
+        CONFIG_BT_BNEP=y
+
+        # --- SDR (RTL2832U) ---
+        CONFIG_DVB_CORE=y
+        CONFIG_DVB_USB=y
+        CONFIG_DVB_USB_RTL28XXU=y
+        CONFIG_DVB_RTL2832=y
+        CONFIG_DVB_RTL2832_SDR=y
+        CONFIG_MEDIA_DIGITAL_TV_SUPPORT=y
+        CONFIG_MEDIA_USB_SUPPORT=y
+
+        # --- CAN Bus ---
+        CONFIG_CAN=y
+        CONFIG_CAN_RAW=y
+        CONFIG_CAN_BCM=y
+        CONFIG_CAN_GW=y
+        CONFIG_CAN_DEV=y
+        CONFIG_CAN_NETLINK=y
+
+        # --- NFC ---
+        CONFIG_NFC=y
+        CONFIG_NFC_NCI=y
+        CONFIG_NFC_HCI=y
+        CONFIG_NFC_PN544=y
+        CONFIG_NFC_NXP_NCI=y
+        CONFIG_NFC_ST21NFCA=y
+        CONFIG_NFC_ST_NCI=y
+
+        # --- Netfilter / NAT / Traffic Redirection ---
+        CONFIG_NETFILTER=y
+        CONFIG_NETFILTER_ADVANCED=y
+        CONFIG_NETFILTER_XTABLES=y
+        CONFIG_NETFILTER_XT_MATCH_TCPMSS=y
+        CONFIG_NF_CONNTRACK=y
+        CONFIG_NF_CONNTRACK_FTP=y
+        CONFIG_NF_CONNTRACK_IRC=y
+        CONFIG_NF_CONNTRACK_SIP=y
+        CONFIG_NF_CONNTRACK_TFTP=y
+        CONFIG_NF_NAT=y
+        CONFIG_NF_NAT_FTP=y
+        CONFIG_NF_NAT_IRC=y
+        CONFIG_NF_NAT_SIP=y
+        CONFIG_NF_NAT_REDIRECT=y
+        CONFIG_IP_NF_IPTABLES=y
+        CONFIG_IP_NF_NAT=y
+        CONFIG_IP_NF_TARGET_MASQUERADE=y
+        CONFIG_IP_NF_TARGET_REDIRECT=y
+        CONFIG_IP6_NF_IPTABLES=y
+        CONFIG_IP6_NF_NAT=y
+        CONFIG_IP6_NF_TARGET_MASQUERADE=y
+        CONFIG_NF_TABLES=y
+        CONFIG_NF_TABLES_IPV4=y
+        CONFIG_NF_TABLES_IPV6=y
+        CONFIG_NFT_NAT=y
+        CONFIG_NFT_MASQ=y
+        CONFIG_NFT_REDIR=y
+        CONFIG_NETFILTER_XT_TARGET_TTL=y
+        CONFIG_NETFILTER_XT_MATCH_TTL=y
+        CONFIG_NETFILTER_XT_MATCH_HL=y
+        CONFIG_NETFILTER_XT_MATCH_OWNER=y
+
+        # --- Bridge (MITM Bridge Attacks) ---
+        CONFIG_BRIDGE=y
+        CONFIG_BRIDGE_NETFILTER=y
+        CONFIG_BRIDGE_NF_EBTABLES=y
+        CONFIG_BRIDGE_EBT_BROUTE=y
+        CONFIG_BRIDGE_EBT_T_FILTER=y
+        CONFIG_BRIDGE_EBT_T_NAT=y
+        CONFIG_BRIDGE_EBT_802_3=y
+        CONFIG_BRIDGE_EBT_AMONG=y
+        CONFIG_BRIDGE_EBT_ARP=y
+        CONFIG_BRIDGE_EBT_IP=y
+        CONFIG_BRIDGE_EBT_IP6=y
+        CONFIG_BRIDGE_EBT_LIMIT=y
+        CONFIG_BRIDGE_EBT_MARK=y
+        CONFIG_BRIDGE_EBT_PKTTYPE=y
+        CONFIG_BRIDGE_EBT_STP=y
+        CONFIG_BRIDGE_EBT_VLAN=y
+        CONFIG_BRIDGE_EBT_ARPREPLY=y
+        CONFIG_BRIDGE_EBT_NFLOG=y
+
+        # --- Filesystem (NFS, FUSE, overlay) ---
+        CONFIG_NFS_FS=y
+        CONFIG_NFS_V3=y
+        CONFIG_NFS_V3_ACL=y
+        CONFIG_NFS_V4=y
+        CONFIG_NFS_V4_1=y
+        CONFIG_NFS_V4_2=y
+        CONFIG_NFSD=y
+        CONFIG_NFSD_V4=y
+        CONFIG_NFS_V4_1_MIGRATION=y
+        CONFIG_FUSE_FS=y
+        CONFIG_OVERLAY_FS=y
+        CONFIG_ZRAM=y
+        CONFIG_ZRAM_DEF_COMP_LZ4=y
+        CONFIG_ZSMALLOC=y
+        CONFIG_ANDROID_BINDER_IPC=y
+        CONFIG_ANDROID_BINDERFS=y
+
+        # --- Debug / Info Export (NetHunter tools) ---
+        CONFIG_IKCONFIG=y
+        CONFIG_IKCONFIG_PROC=y
+        CONFIG_DEVPORT=y
+        CONFIG_PROC_FS=y
+        CONFIG_SYSFS=y
+        CONFIG_DEBUG_FS=y
+        CONFIG_KALLSYMS=y
+        CONFIG_KALLSYMS_ALL=y
+        CONFIG_MODULE_UNLOAD=y
+        CONFIG_MODULE_SIG=n
+        CONFIG_SECURITY_DMESG_RESTRICT=n
+
+        # --- Network Tools ---
+        CONFIG_PACKET=y
+        CONFIG_PACKET_DIAG=y
+        CONFIG_INET_DIAG=y
+        CONFIG_NETFILTER_NETLINK=y
+        CONFIG_NETFILTER_NETLINK_LOG=y
+        CONFIG_NETFILTER_NETLINK_QUEUE=y
+        CONFIG_NFNETLINK_QUEUE=y
+        CONFIG_INET6_AH=y
+        CONFIG_INET6_ESP=y
+        CONFIG_INET6_IPCOMP=y
+        CONFIG_IPV6=y
+        CONFIG_VETH=y
+        CONFIG_TUN=y
+        CONFIG_MACVLAN=y
+        CONFIG_VLAN_8021Q=y
+        CONFIG_IP_MULTIPLE_TABLES=y
+
+        # --- External Wi-Fi Drivers (as modules) ---
+        CONFIG_RTL8821AU=m
+        CONFIG_RTL8812AU=m
+        CONFIG_RTL8XXXU=m
+        CONFIG_RTW88=m
+
+        # --- SELinux (permissive debug) ---
+        CONFIG_SECURITY_SELINUX=y
+        CONFIG_SECURITY_SELINUX_DEVELOP=y
+
+        # === End NetHunter Full Feature Configs ===
+        NETCONFIG
+
+        echo "[+] NetHunter full feature configs appended to $FRAGMENT"
+
+    # =========================================================================
+    # Kali NetHunter — Build External Wi-Fi Drivers
+    # (RTL8812AU, RTL8188EUS, RTL88x2BU)
+    # =========================================================================
+    - name: Build External Wi-Fi Drivers
+      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        WORKSPACE="${{ github.workspace }}"
+        KERNEL_SRC="$WORKSPACE/kernel/common"
+        ARCH="arm64"
+        CROSS_COMPILE="aarch64-linux-gnu-"
+        OUT_DIR="$WORKSPACE/external_modules"
+        mkdir -p "$OUT_DIR"
+
+        export ARCH CROSS_COMPILE
+
+        # ---- Helper: build a driver ----
+        build_driver() {
+          local NAME="$1"
+          local REPO="$2"
+          local DIR="/tmp/driver-${NAME}"
+          echo "==============================================="
+          echo "[*] Building driver: $NAME"
+          rm -rf "$DIR"
+          if ! git clone --depth=1 "$REPO" "$DIR"; then
+            echo "[!] Gagal clone $REPO — skip."
+            return 1
+          fi
+          cd "$DIR"
+          # Beberapa driver memakai Makefile dengan KSRC / KERNEL_DIR
+          if make KSRC="$KERNEL_SRC" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)"; then
+            find "$DIR" -name "*.ko" -exec cp {} "$OUT_DIR/" \;
+            echo "[+] $NAME berhasil dikompilasi."
+          else
+            echo "[!] $NAME gagal dikompilasi — cek log di atas."
+            return 1
+          fi
+          cd "$WORKSPACE"
+          return 0
+        }
+
+        # ---- RTL8812AU (AC1200/AC600) ----
+        build_driver "rtl8812au" \
+          "https://github.com/aircrack-ng/rtl8812au.git" || true
+
+        # ---- RTL8188EUS (N150 mini) ----
+        build_driver "rtl8188eus" \
+          "https://github.com/gglluukk/rtl8188eus.git" || true
+
+        # ---- RTL88x2BU (AC1200 USB) ----
+        build_driver "rtl88x2bu" \
+          "https://github.com/morrownr/88x2bu-20210702.git" || true
+
+        echo "==============================================="
+        echo "[*] Modul yang berhasil dikompilasi:"
+        ls -la "$OUT_DIR" || true
+
+    # =========================================================================
+    # Kali NetHunter — Verify Features
+    # =========================================================================
+    - name: Verify NetHunter Features
+      if: contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All'
+      shell: bash
+      run: |
+        set -euo pipefail
+        WORKSPACE="${{ github.workspace }}"
+        KERNEL_SRC="$WORKSPACE/kernel/common"
+        FRAGMENT="$WORKSPACE/wild_gki.fragment"
+
+        echo "==============================================="
+        echo "[*] Verifikasi fitur NetHunter:"
+        echo "==============================================="
+
+        check_config() {
+          local cfg="$1"
+          if grep -q "^${cfg}=" "$FRAGMENT" 2>/dev/null; then
+            echo "  [+] $cfg (ada di fragment)"
+          else
+            echo "  [-] $cfg (TIDAK ditemukan di fragment)"
+          fi
+        }
+
+        echo "--- Wi-Fi Injection ---"
+        check_config "CONFIG_CFG80211"
+        check_config "CONFIG_MAC80211"
+
+        echo "--- USB HID ---"
+        check_config "CONFIG_USB_CONFIGFS_F_HID"
+        check_config "CONFIG_USB_HID"
+        check_config "CONFIG_HIDRAW"
+
+        echo "--- Bluetooth RFCOMM ---"
+        check_config "CONFIG_BT_RFCOMM"
+        check_config "CONFIG_BT_HIDP"
+
+        echo "--- SDR ---"
+        check_config "CONFIG_DVB_RTL2832_SDR"
+
+        echo "--- CAN Bus ---"
+        check_config "CONFIG_CAN"
+        check_config "CONFIG_CAN_RAW"
+
+        echo "--- Netfilter ---"
+        check_config "CONFIG_NF_NAT"
+        check_config "CONFIG_IP_NF_TARGET_MASQUERADE"
+
+        echo "--- External Wi-Fi Modules ---"
+        if [ -d "$WORKSPACE/external_modules" ]; then
+          ls -la "$WORKSPACE/external_modules/" || true
+        fi
+
+        echo "==============================================="
+        echo "[*] Verifikasi selesai."
+
+    # =========================================================================
+    # End Kali NetHunter
     # =========================================================================
 
     - name: Apply ABI Compare Bypass
       if: false
       working-directory: ${{ github.workspace }}/kernel
       run: |
-        # ABI compare bypass per kernel/android version
-        # Edit each block as needed per version
         if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
           sed -i 's/^\s*exit 1$/    echo "Who Cares? Bypassing Now!"/' build/abi/compare_to_symbol_list
         elif [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.10" ]]; then
@@ -556,13 +854,22 @@ jobs:
       id: scan
       if: always()
       uses: ./.github/actions/scan-patch-rejects
-        
+
     - name: Upload Rejects
       if: always()
       uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.extract.outputs.file_name }}-Rejects
         path: patch-rejects/
+        if-no-files-found: ignore
+        compression-level: 9
+
+    - name: Upload External Wi-Fi Modules
+      if: always() && (contains(inputs.feature_set, 'NET') || inputs.feature_set == 'All')
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.extract.outputs.file_name }}-External-WiFi-Modules
+        path: ${{ github.workspace }}/external_modules/
         if-no-files-found: ignore
         compression-level: 9
 
@@ -711,29 +1018,24 @@ jobs:
         SUMMARY_FILE="/tmp/build-summary-${SUMMARY_BASE}.md"
         echo "SUMMARY_BASE=${SUMMARY_BASE}" >> "$GITHUB_ENV"
 
-        # NoMount is optional (nomount_commit input is always populated, so
-        # feature_set is the only reliable signal for whether it was built).
         NOMOUNT_ENABLED="false"
         if [ "${{ contains(inputs.feature_set, 'NoMount') || inputs.feature_set == 'All' }}" = "true" ]; then
           NOMOUNT_ENABLED="true"
         fi
-        
-        # Determine build status
+
         if [ "${{ job.status }}" = "success" ]; then
           STATUS="[+] Success"
         else
           STATUS="[-] Failed"
         fi
-        
-        # Get kernel version from Image if available
+
         KERNEL_VER_STR=""
         if [ -f "/home/runner/out/dist/Image" ]; then
           KERNEL_VER_STR=$(strings "/home/runner/out/dist/Image" | grep -m1 "^Linux version " | sed 's/Linux version //' || echo "")
         elif [ -f "/home/runner/out/Image" ]; then
           KERNEL_VER_STR=$(strings "/home/runner/out/Image" | grep -m1 "^Linux version " | sed 's/Linux version //' || echo "")
         fi
-        
-        # Get KSU version from env (set by kernelsu action)
+
         KSU_VER="${KSU_VERSION:-N/A}"
         KSU_TAG="${KSU_GIT_TAG:-N/A}"
         ROOT_IMPL="${ROOT_IMPLEMENTATION:-KernelSU-Next (legacy path)}"
@@ -746,22 +1048,16 @@ jobs:
           NOMOUNT_SHA="N/A"
         fi
         SUSFS_SHA="${SUSFS_COMMIT:-${{ inputs.susfs_commit }}}"
-        
-        # Get SUSFS version from susfs.h if available
+
         SUSFS_VER="N/A"
         if [ -f "${{ github.workspace }}/kernel/common/include/linux/susfs.h" ]; then
           SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
         fi
-        
-        # Get cache stats from env (set by cache-stats action)
+
         CCACHE_HIT="${CCACHE_HIT_RATE:-N/A}"
-        
-        # Get build time (approximate from step timing)
         BUILD_TIME="N/A"
-        
-        # Count warnings from build log if available
         WARNINGS="N/A"
-        
+
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
           echo
@@ -785,8 +1081,7 @@ jobs:
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
           echo
-          
-          # Kernel Fixes
+
           if [ -f /tmp/kernel-fixes-summary.md ]; then
             echo "### Kernel Fixes"
             cat /tmp/kernel-fixes-summary.md
@@ -811,19 +1106,16 @@ jobs:
       run: |
         set -euo pipefail
 
-        # NoMount is optional: only resolve its artifact when requested.
-        # (nomount_commit input is always populated, so feature_set is the
-        # only reliable signal for whether NoMount was integrated.)
         NOMOUNT_ENABLED="false"
         if [ "${{ contains(inputs.feature_set, 'NoMount') || inputs.feature_set == 'All' }}" = "true" ]; then
           NOMOUNT_ENABLED="true"
         fi
 
         if [ "$NOMOUNT_ENABLED" = "true" ]; then
-          METHOD="GKI source build with SHA-pinned root implementation, SUSFS, and NoMount"
+          METHOD="GKI source build with SHA-pinned root implementation, SUSFS, NoMount, and Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="${{ inputs.nomount_commit }}"
         else
-          METHOD="GKI source build with SHA-pinned root implementation and SUSFS"
+          METHOD="GKI source build with SHA-pinned root implementation, SUSFS, and Kali NetHunter"
           NOMOUNT_MODULE_COMMIT="N/A"
         fi
 
@@ -839,18 +1131,10 @@ jobs:
           local attempt
           page_file="$(mktemp)"
 
-          # GitHub indexes an artifact asynchronously: the upload step can
-          # report "successfully finalized" and still not have the artifact in
-          # the run's list for a second or two. Retry the whole lookup before
-          # calling it missing, otherwise a just-uploaded artifact reads as
-          # absent and fails the step.
           for attempt in 1 2 3 4 5 6; do
             page=1
             match=""
 
-            # Page through the artifacts API, checking each page for the exact
-            # artifact name. Uses a temp file for jq input (not argv) so large
-            # artifact lists can't exceed the OS argument-length limit.
             while :; do
               curl --fail --silent --show-error --location \
                 --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 \
@@ -980,8 +1264,6 @@ jobs:
           ' "$metadata_file" > /dev/null
         fi
 
-        # Merge the verified metadata into the combined summary markdown so both
-        # live in a single artifact: human-readable table + machine JSON block.
         {
           echo
           echo "## Verified Metadata"

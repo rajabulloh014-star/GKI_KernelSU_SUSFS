@@ -451,41 +451,57 @@ jobs:
         keep_kmi: ${{ inputs.keep_kmi }}
 
     # ============================================================
-    # STEP BARU: Memaksa hapus "-android14" dari versi kernel
+    # STEP BARU: Memaksa hapus "-android14" secara menyeluruh
     # ============================================================
     - name: Force Remove Android Version from Kernel String
       shell: bash
       run: |
         set -euo pipefail
-        echo "Memulai proses penghapusan string -android14 dari source kernel..."
-        
-        # 1. Patch file Makefile kernel untuk menghapus -android14 dari EXTRAVERSION
-        KERNEL_DIR="${{ github.workspace }}/kernel"
-        if [ -d "$KERNEL_DIR" ]; then
-          MAKEFILE=$(find "$KERNEL_DIR" -maxdepth 3 -name Makefile -exec grep -l "^VERSION =" {} \; | head -n 1)
-          if [ -n "$MAKEFILE" ]; then
-            echo "[*] Memodifikasi Makefile: $MAKEFILE"
-            # Menghapus string -androidXX dari EXTRAVERSION
-            sed -i 's/EXTRAVERSION = .*-android[0-9]*.*/EXTRAVERSION = /' "$MAKEFILE"
-            echo "[+] Berhasil menghapus -android14 dari EXTRAVERSION"
-          else
-            echo "[-] Makefile kernel utama tidak ditemukan."
-          fi
-        else
-          echo "[-] Direktori kernel tidak ditemukan di $KERNEL_DIR."
-        fi
+        echo "Memulai proses penghapusan string -android14 secara menyeluruh..."
 
-        # 2. Override CONFIG_LOCALVERSION di file fragment agar tidak ada tambahan versi
+        KERNEL_DIR="${{ github.workspace }}/kernel"
+
+        # 1. Matikan via Environment Variable (mencegah build script menambahkannya)
+        echo "LOCALVERSION=" >> $GITHUB_ENV
+        echo "KMI_GENERATION=" >> $GITHUB_ENV
+
+        # 2. Patch scripts/setlocalversion (script yang sering menambahkan suffix otomatis)
+        SETLOCAL=$(find "$KERNEL_DIR" -name "setlocalversion" 2>/dev/null || true)
+        for f in $SETLOCAL; do
+          echo "[*] Memodifikasi $f"
+          sed -i 's/-android[0-9]*//g' "$f"
+          sed -i 's/echo "\$KMI_GENERATION"/:/g' "$f" || true
+        done
+
+        # 3. Patch build.config files (Kleaf build system)
+        CONFIGS=$(find "$KERNEL_DIR" -name "build.config*" -type f 2>/dev/null || true)
+        for f in $CONFIGS; do
+          if grep -q -E "LOCALVERSION|android14|-android" "$f"; then
+            echo "[*] Memodifikasi $f"
+            sed -i 's/LOCALVERSION=".*"/LOCALVERSION=""/g' "$f"
+            sed -i 's/LOCALVERSION=.*/LOCALVERSION=""/g' "$f"
+            sed -i 's/-android[0-9]*//g' "$f"
+          fi
+        done
+
+        # 4. Patch Makefile di folder common
+        MAKEFILES=$(find "$KERNEL_DIR/common" -name "Makefile" 2>/dev/null || true)
+        for f in $MAKEFILES; do
+          if [ -f "$f" ]; then
+            echo "[*] Memodifikasi $f"
+            sed -i 's/^EXTRAVERSION.*/EXTRAVERSION =/' "$f"
+            sed -i 's/^CONFIG_LOCALVERSION.*/CONFIG_LOCALVERSION=""/' "$f"
+          fi
+        done
+
+        # 5. Update fragment config
         FRAGMENT="${{ github.workspace }}/wild_gki.fragment"
-        if [ -f "$FRAGMENT" ]; then
-          echo 'CONFIG_LOCALVERSION=""' >> "$FRAGMENT"
-          echo "[+] Menambahkan override CONFIG_LOCALVERSION ke fragment"
-        else
-          echo "[-] File wild_gki.fragment tidak ditemukan, membuat baru..."
-          touch "$FRAGMENT"
-          echo 'CONFIG_LOCALVERSION=""' >> "$FRAGMENT"
-          echo "[+] File wild_gki.fragment dibuat dan override ditambahkan."
-        fi
+        touch "$FRAGMENT"
+        sed -i '/CONFIG_LOCALVERSION/d' "$FRAGMENT"
+        echo 'CONFIG_LOCALVERSION=""' >> "$FRAGMENT"
+        echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$FRAGMENT"
+        
+        echo "[+] Selesai! Semua potensi munculnya -android14 telah dihilangkan."
     # ============================================================
 
     - name: Remove Protected Exports

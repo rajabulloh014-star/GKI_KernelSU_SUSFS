@@ -120,6 +120,20 @@ runs:
         echo "Verifying page size using $CONFIG_FILE"
         grep -E '^(# )?CONFIG_ARM64_(4K|16K|64K)_PAGES|^CONFIG_ARM64_PAGE_SHIFT' "$CONFIG_FILE" || true
 
+        # --- HZ verification ---
+        # The kernel's real HZ cannot be inspected from the flashed device:
+        # the stock-config action deliberately redirects the embedded
+        # IKCONFIG blob (and therefore /proc/config.gz) to a stock GKI
+        # config, so the device reports CONFIG_HZ_250=y regardless of what
+        # was actually built. Print the resolved .config's HZ here, from the
+        # exact file the build consumed.
+        echo ""
+        echo "========== HZ VERIFICATION =========="
+        grep -E '^CONFIG_HZ|^# CONFIG_HZ' "$CONFIG_FILE" || echo "WARNING: no CONFIG_HZ found"
+        echo "====================================="
+        echo ""
+        # --- end HZ verification ---
+
         if [ "$PAGE_SIZE" = "16k" ]; then
           want_on="CONFIG_ARM64_16K_PAGES=y"
           want_off="# CONFIG_ARM64_4K_PAGES is not set"

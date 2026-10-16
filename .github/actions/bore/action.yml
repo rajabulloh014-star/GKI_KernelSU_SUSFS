@@ -545,6 +545,12 @@ runs:
       # the BORE base_slice so the exported symbol stays defined either way.
       # Idempotent: keyed on the BORE nsecs_per_tick declaration; if the
       # sed already ran (or the hunk applied on a non-GKI tree), it no-ops.
+      #
+      # GATED on kernel_version == '6.6': the step's grep pre-checks already
+      # no-op elsewhere, but gating keeps the step list clean and prevents
+      # any surprise if the internal marker ever drifts. This step is only
+      # ever relevant for android15-6.6.
+      if: inputs.kernel_version == '6.6'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
@@ -654,6 +660,16 @@ runs:
       # the declaration marker is absent and this no-ops; the step above
       # likewise no-ops on a 5.1.0 tree (it keys on nsecs_per_tick, which
       # the 5.1.0 generation never uses).
+      #
+      # GATED on kernel_version == '6.6' AND variant == '5.1.0': the Python
+      # script's own comment claims it "no-ops on the default 5.9.6 variant",
+      # but on non-6.6 kernels (5.10/5.15/6.1) it does NOT no-op - it hard-
+      # fails with "FATAL normalized_sysctl_sched_base_slice not found after
+      # anchor - tree drift" because those trees use CFS (sysctl_sched_min_
+      # granularity), not EEVDF (base_slice). Without the version gate this
+      # killed every 6.1 BakaSU leg (build #18, 6.1.138-android14). The
+      # script is only meaningful on the 6.6+5.1.0 tree it was written for.
+      if: inputs.kernel_version == '6.6' && inputs.variant == '5.1.0'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |

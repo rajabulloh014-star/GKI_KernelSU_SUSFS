@@ -274,10 +274,10 @@ jobs:
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
-          CONFIG_HZ_300=y
+          CONFIG_HZ_1000=y
+          CONFIG_HZ_300=n
           CONFIG_HZ_250=n
           CONFIG_HZ_100=n
-          CONFIG_HZ_1000=n
           CONFIG_NO_HZ_IDLE=y
           CONFIG_HIGH_RES_TIMERS=y
           CONFIG_HZ_PERIODIC=n
